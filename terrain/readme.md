@@ -3,6 +3,11 @@
 A tile-based procedural terrain system for [Bevy](https://bevyengine.org/), built around a multi-draw indirect render pipeline, a custom slot-map instance manager, and a double-buffered GPU upload system. CPU draw call overhead is **O(1)** regardless of tile count.
 
 ***
+## Screenshots
+
+![Example 1](screenshots/example1.png)
+
+![Example 2](screenshots/example2.png)
 
 ## Table of Contents
 
@@ -231,8 +236,3 @@ src/
 | Two-pass fBm | Accurate normalization | Full map must fit in memory twice |
 
 
-## Screenshots
-
-![Example 1](screenshots/example1.png)
-
-![Example 2](screenshots/example2.png)
