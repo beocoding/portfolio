@@ -1,6 +1,6 @@
 # Build output
 /target/
-
+**/target/
 # Cargo lock (keep for binaries, ignore for libraries)
 # Cargo.lock  ← uncomment this line if your crate is a library
 
