@@ -233,6 +233,6 @@ src/
 
 ## Screenshots
 
-![Example 1](../screenshots/example1.png)
+![Example 1](screenshots/example1.png)
 
-![Example 2](../screenshots/example2.png)
+![Example 2](screenshots/example2.png)
