@@ -229,3 +229,10 @@ src/
 | Packed `u32` normals | 8-byte vertex, less bandwidth | Decode cost in vertex shader |
 | Triangle strips | ~66% fewer vertices vs. triangle list | Degenerate triangles needed between strips |
 | Two-pass fBm | Accurate normalization | Full map must fit in memory twice |
+
+
+## Screenshots
+
+![Example 1](screenshots/example-1.png)
+
+![Example 2](screenshots/example-2.png)

@@ -1,0 +1,27 @@
+# Build output
+/target/
+
+# Cargo lock (keep for binaries, ignore for libraries)
+# Cargo.lock  ← uncomment this line if your crate is a library
+
+# Environment and editor files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Profiling / benchmarks
+perf.data
+perf.data.old
+flamegraph.svg
+
+# wgpu / graphics debug dumps
+*.wgsl.spv
+*.metal
