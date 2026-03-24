@@ -1,20 +1,254 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <title>XPBD Demo</title>
-    <style>
-      * { margin: 0; padding: 0; }
-      body { background: #000; overflow: hidden; }
-      canvas { display: block; width: 100vw; height: 100vh; }
-    </style>
-  </head>
-  <body>
-    <canvas id="bevy"></canvas>
-    <script type="module">
-      import init, * as bindings from './xpbd-ea30d9cac143c29e.js';
-      const wasm = await init({ module_or_path: './xpbd-ea30d9cac143c29e_bg.wasm' });
-      window.wasmBindings = bindings;
-    </script>
-  </body>
+<head>
+<meta charset="utf-8" />
+<title>XPBD Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+
+  #canvas-wrapper {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  #scroll-hint {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.4);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    animation: pulse 2.5s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 0.9; }
+  }
+
+  #description {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 72px 32px 96px;
+  }
+
+  #description h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+
+  #description .subtitle {
+    font-size: 14px;
+    color: #6c7a8a;
+    margin-bottom: 56px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .scene-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 24px;
+    margin-bottom: 56px;
+  }
+
+  .scene-card {
+    background: #13141a;
+    border: 1px solid #1e2030;
+    border-radius: 10px;
+    padding: 24px;
+  }
+
+  .scene-card .tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    margin-bottom: 14px;
+  }
+
+  .tag-door   { background: #1a2a1a; color: #5ecf7a; border: 1px solid #2a4a2a; }
+  .tag-servo  { background: #1a1a2a; color: #7a8ff0; border: 1px solid #2a2a4a; }
+  .tag-chain  { background: #2a1a1a; color: #e07a50; border: 1px solid #4a2a1a; }
+
+  .scene-card h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e8eaf0;
+    margin-bottom: 10px;
+  }
+
+  .scene-card p {
+    font-size: 14px;
+    line-height: 1.7;
+    color: #8090a0;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #1e2030;
+    margin-bottom: 48px;
+  }
+
+  .tech-section h3 {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6c7a8a;
+    margin-bottom: 20px;
+  }
+
+  .tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+
+  .tech-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .tech-item .tech-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #c0c8d8;
+  }
+
+  .tech-item .tech-desc {
+    font-size: 13px;
+    color: #6c7a8a;
+    line-height: 1.6;
+  }
+
+  .interact-note {
+    background: #13141a;
+    border: 1px solid #1e2030;
+    border-left: 3px solid #7a8ff0;
+    border-radius: 6px;
+    padding: 16px 20px;
+    font-size: 14px;
+    color: #8090a0;
+    line-height: 1.6;
+  }
+
+  .interact-note strong {
+    color: #c0c8d8;
+  }
+
+  .source-link {
+    display: inline-block;
+    margin-top: 32px;
+    font-size: 13px;
+    color: #7a8ff0;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.2s;
+  }
+
+  .source-link:hover {
+    border-color: #7a8ff0;
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-wrapper">
+  <canvas id="bevy"></canvas>
+  <div id="scroll-hint">↓ scroll for details</div>
+</div>
+
+<div id="description">
+  <h1>XPBD Rigid Body Physics</h1>
+  <p class="subtitle">Built in Rust · Bevy ECS · WebAssembly</p>
+
+  <div class="scene-grid">
+    <div class="scene-card">
+      <span class="tag tag-door">Scene 1</span>
+      <h2>Door Hinge</h2>
+      <p>A dynamic door is attached to a static wall via a hinge joint constrained to ±90°. Gravity pulls it down while angular damping bleeds energy, letting it swing naturally to rest. The hinge enforces both positional and rotational alignment each sub-step.</p>
+    </div>
+    <div class="scene-card">
+      <span class="tag tag-servo">Scene 2</span>
+      <h2>Servo Arm</h2>
+      <p>A purple arm hangs from a fixed anchor with a hinge that has a soft target angle of 45°. The constraint acts like a spring servo — gravity pulls the arm down while the position-based correction drives it toward the target, reaching equilibrium between the two forces.</p>
+    </div>
+    <div class="scene-card">
+      <span class="tag tag-chain">Scene 3</span>
+      <h2>Hinged Chain</h2>
+      <p>Four rigid segments hang in series from a fixed orange anchor, each connected by a hinge limited to ±60° of swing. Drag the bottom segment to feel how forces propagate up the chain. Each joint independently enforces position, axis alignment, and angle limits every frame.</p>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="tech-section">
+    <h3>How it works</h3>
+    <div class="tech-grid">
+      <div class="tech-item">
+        <span class="tech-label">XPBD Algorithm</span>
+        <span class="tech-desc">Extended Position-Based Dynamics separates position correction from velocity updates, giving stable behavior at practical timesteps without energy blow-up.</span>
+      </div>
+      <div class="tech-item">
+        <span class="tech-label">Sub-stepped solver</span>
+        <span class="tech-desc">Each fixed frame is divided into 20 sub-steps. Constraints are solved iteratively within each sub-step, with compliance scaling by dt² to stay timestep-independent.</span>
+      </div>
+      <div class="tech-item">
+        <span class="tech-label">Bevy ECS pipeline</span>
+        <span class="tech-desc">Bodies are snapshotted from ECS into a plain Rust solver struct each frame, keeping the hot physics loop free of ECS overhead, then written back to transforms.</span>
+      </div>
+      <div class="tech-item">
+        <span class="tech-label">Inertia tensors</span>
+        <span class="tech-desc">Angular corrections use per-shape generalized inverse mass, accounting for rotational inertia in local space. Torques are applied as quaternion deltas, not Euler angles.</span>
+      </div>
+      <div class="tech-item">
+        <span class="tech-label">Anchor system</span>
+        <span class="tech-desc">Constraints attach at arbitrary local offsets via child anchor entities. World-space positions are computed each sub-step from the current body transform.</span>
+      </div>
+      <div class="tech-item">
+        <span class="tech-label">WebAssembly</span>
+        <span class="tech-desc">Compiled from Rust to wasm32 via Trunk. All solver internals use f32 for WASM performance. Rendered with Bevy's WebGL2 backend.</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="interact-note">
+    <strong>Try it:</strong> click and drag any of the colored bodies in the scene above. A soft grab constraint is created at the pick point and follows your cursor, letting you feel the weight and constraint behavior directly.
+  </p>
+
+  <a class="source-link" href="https://github.com/your-username/xpbd" target="_blank">View source on GitHub →</a>
+</div>
+
+<script type="module">
+  import init, * as bindings from './xpbd-ea30d9cac143c29e.js';
+  const wasm = await init({ module_or_path: './xpbd-ea30d9cac143c29e_bg.wasm' });
+  window.wasmBindings = bindings;
+</script>
+
+</body>
 </html>
