@@ -15,7 +15,7 @@
 
   #canvas-wrapper {
     width: 100vw;
-    height: 100vh;
+    height: 62vh;
     position: relative;
   }
 
@@ -25,27 +25,10 @@
     height: 100%;
   }
 
-  #scroll-hint {
-    position: absolute;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: rgba(255,255,255,0.4);
-    font-size: 13px;
-    letter-spacing: 0.08em;
-    animation: pulse 2.5s ease-in-out infinite;
-    pointer-events: none;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.9; }
-  }
-
   #description {
     max-width: 860px;
     margin: 0 auto;
-    padding: 72px 32px 96px;
+    padding: 40px 32px 96px;
   }
 
   #description h1 {
@@ -180,7 +163,7 @@
 
 <div id="canvas-wrapper">
   <canvas id="bevy"></canvas>
-  <div id="scroll-hint">↓ scroll for details</div>
+
 </div>
 
 <div id="description">
