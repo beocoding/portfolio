@@ -4,7 +4,7 @@
 A real-time rigid body physics engine built from scratch in Rust using [Bevy](https://bevyengine.org/), implementing the **Extended Position-Based Dynamics (XPBD)** algorithm. Runs natively and compiles to **WebAssembly** via Trunk for browser-based interactive demos.
 
 
-**[Live Demo](demo/)** — drag and interact with the simulated bodies in real time.
+**[Live Demo](docs/demo)** — drag and interact with the simulated bodies in real time.
 
 
 ---
