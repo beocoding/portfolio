@@ -8,19 +8,16 @@
       body { background: #000; overflow: hidden; }
       canvas { display: block; width: 100vw; height: 100vh; }
     </style>
-  <link rel="modulepreload" href="/xpbd-ea30d9cac143c29e.js" crossorigin="anonymous" integrity="sha384-r6pLsI8K6l77nMdDZqo1h7wShmZF0SeSgaZpciGALmlnjvpZmuDpVSHovmFDrNeD"><link rel="preload" href="/xpbd-ea30d9cac143c29e_bg.wasm" crossorigin="anonymous" integrity="sha384-LdeiCpgQFYUpJ3grJfQAD4c+AAiDbYesUaOpJ17GLCexARsXo2ShQ6sf6YfbB+J2" as="fetch" type="application/wasm"></head>
+    <link rel="modulepreload" href="./xpbd-ea30d9cac143c29e.js" crossorigin="anonymous" integrity="sha384-r6pLsI8K6l77nMdDZqo1h7wShmZF0SeSgaZpciGALmlnjvpZmuDpVSHovmFDrNeD">
+    <link rel="preload" href="./xpbd-ea30d9cac143c29e_bg.wasm" crossorigin="anonymous" integrity="sha384-LdeiCpgQFYUpJ3grJfQAD4c+AAiDbYesUaOpJ17GLCexARsXo2ShQ6sf6YfbB+J2" as="fetch" type="application/wasm">
+  </head>
   <body>
     <canvas id="bevy"></canvas>
-  
-<script type="module">
-import init, * as bindings from '/xpbd-ea30d9cac143c29e.js';
-const wasm = await init({ module_or_path: '/xpbd-ea30d9cac143c29e_bg.wasm' });
-
-
-window.wasmBindings = bindings;
-
-
-dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
-
-</script></body>
+    <script type="module">
+      import init, * as bindings from './xpbd-ea30d9cac143c29e.js';
+      const wasm = await init({ module_or_path: './xpbd-ea30d9cac143c29e_bg.wasm' });
+      window.wasmBindings = bindings;
+      dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+    </script>
+  </body>
 </html>
