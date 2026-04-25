@@ -1,0 +1,10 @@
+namespace bench_fbs;
+
+table User {
+  id:     ulong;
+  name:   string;
+  email:  string;
+  status: string;
+}
+
+root_type User;

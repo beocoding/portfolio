@@ -30,6 +30,7 @@
   - [Registry Encode](#registry-encode)
   - [Registry Decode](#registry-decode)
   - [Registry Network Latency](#registry-network-latency)
+  - [Encoded Size](#encoded-size)
 
 ---
 
@@ -470,7 +471,7 @@ for tag in tags { ... }     // iterates without allocating
 # Benchmark Results
 ---
 
-Benchmarks compare **JSON**, **Protobuf** (`proto`), **FlatBuffers** (`flatbuf`), and **Flatr** (`Flatr`) across encode, decode, and network latency. All times are Criterion median values. Network latency = decode + full field traversal of every field in a single timed block.
+Benchmarks compare **JSON**, **Protobuf** (`proto`), **FlatBuffers** (`flatbuf`), and **Fluffr** (`Fluffr`) across encode, decode, and network latency. All times are Criterion median values. Network latency = decode + full field traversal of every field in a single timed block.
 
 ***
 ## Product Type Breakdown
@@ -504,7 +505,7 @@ For JSON, Proto, and FlatBuffers, a registry of N products is **Array of Structs
 
 Reading `price` for all N products requires striding through the entire buffer, touching all 11 fields per record.
 
-Flatr's `#[derive(Row)]` generates a **Struct of Arrays** registry:
+Fluffr's `#[derive(Row)]` generates a **Struct of Arrays** registry:
 
 ```
 {
@@ -545,11 +546,11 @@ Network Latency measures the time to decode and then read each field.
 | JSON    | 356.8       | 597.1       | 593.2                |
 | Proto   | **90.5**    | 240.7       | 236.7                |
 | FlatBuf | 361.4       | 337.2       | 359.8                |
-| FlatR   | 167.7       | **4.97**    | **6.41**             |
+| Fluffr   | 167.7       | **4.97**    | **6.41**             |
 
 Proto is the fastest encoder at 90.5 ns — 4× faster than JSON and FlatBuffers which are nearly identical (~357–361 ns). 
 
-FlatR decode is 120× faster than Proto at 4.97 ns — the zero-copy view returns immediately. FlatBuf decode at 337 ns is slower than Proto despite also being lazy, because flatbuffers::root() runs a buffer size and alignment check that Proto's field-by-field parse happens to edge out at this payload size.
+Fluffr decode is 120× faster than Proto at 4.97 ns — the zero-copy view returns immediately. FlatBuf decode at 337 ns is slower than Proto despite also being lazy, because flatbuffers::root() runs a buffer size and alignment check that Proto's field-by-field parse happens to edge out at this payload size.
 ***
 
 ## Registry Encode
@@ -559,9 +560,9 @@ FlatR decode is 120× faster than Proto at 4.97 ns — the zero-copy view return
 | JSON    | 29.6 us         | 152.8 us          | 306.3 us          | 3,069 us          |
 | Proto   | 8.85 us         | 43.1 us           | 86.9 us           | 879 us            |
 | FlatBuf | 31.5 us         | 159.4 us          | 325.2 us          | 3,238 us          |
-| FlatR   | **6.82 us**     | **34.8 us**       | **69.2 us**       | **684 us**        |
+| Fluffr   | **6.82 us**     | **34.8 us**       | **69.2 us**       | **684 us**        |
 
-Proto leads at every size, but FlatR closes the gap aggressively at scale — at 10,000 items FlatR is 22% faster than Proto (684 µs vs 879 µs), because columnar layout amortizes string encoding across contiguous memory rather than per-object vtable writes. FlatBuffers and JSON are consistently 3–4× slower than Proto at every size.
+Proto leads at every size, but Fluffr closes the gap aggressively at scale — at 10,000 items Fluffr is 22% faster than Proto (684 µs vs 879 µs), because columnar layout amortizes string encoding across contiguous memory rather than per-object vtable writes. FlatBuffers and JSON are consistently 3–4× slower than Proto at every size.
 ***
 
 ## Registry Decode
@@ -571,9 +572,9 @@ Proto leads at every size, but FlatR closes the gap aggressively at scale — at
 | JSON    | 68.3 µs              | 348.0 µs               | 690.1 µs               | 6.95 ms                |
 | Proto   | 35.2 µs              | 178.1 µs               | 356.5 µs               | 3.57 ms                |
 | FlatBuf | 35.1 µs              | 176.9 µs               | 355.4 µs               | 3.55 ms                |
-| FlatR   | **4.89 ns**          | **4.97 ns**            | **4.85 ns**            | **4.90 ns**            |
+| Fluffr   | **4.89 ns**          | **4.97 ns**            | **4.85 ns**            | **4.90 ns**            |
 
-FlatR decode is constant ~4.9 ns at every registry size — it doesn't scale with n at all because it's a single root pointer cast into columnar arrays. Proto and FlatBuffers are nearly identical (both eager field parsing under the hood when you force access), each tracking about 2× faster than JSON.
+Fluffr decode is constant ~4.9 ns at every registry size — it doesn't scale with n at all because it's a single root pointer cast into columnar arrays. Proto and FlatBuffers are nearly identical (both eager field parsing under the hood when you force access), each tracking about 2× faster than JSON.
 ***
 
 ## Registry Network Latency
@@ -583,8 +584,54 @@ FlatR decode is constant ~4.9 ns at every registry size — it doesn't scale wit
 | JSON    | 67.7 µs          | 347.8 µs          | 701.6 µs          | 7.11 ms          |
 | Proto   | 36.2 µs          | 177.2 µs          | 350.9 µs          | 3.56 ms          |
 | FlatBuf | 37.3 µs          | 190.9 µs          | 374.8 µs          | 3.77 ms          |
-| FlatR   | 618 ns           | 3.10 µs           | 6.28 µs           | 66.7 µs          |
+| Fluffr   | 618 ns           | 3.10 µs           | 6.28 µs           | 66.7 µs          |
 
-This is the most realistic benchmark — it forces a full decode plus traversal of every field on every item, matching a real receive-and-read workload. FlatR scales linearly but remains ~53× faster than Proto at 10,000 items (66.7 µs vs 3.56 ms), because column reads stride through contiguous memory while Proto and FlatBuffers must chase per-object pointers across the heap. FlatBuffers is consistently ~5–8% slower than Proto despite identical lazy semantics, reflecting vtable indirection overhead per field access.
+This is the most realistic benchmark — it forces a full decode plus traversal of every field on every item, matching a real receive-and-read workload. Fluffr scales linearly but remains ~53× faster than Proto at 10,000 items (66.7 µs vs 3.56 ms), because column reads stride through contiguous memory while Proto and FlatBuffers must chase per-object pointers across the heap. FlatBuffers is consistently ~5–8% slower than Proto despite identical lazy semantics, reflecting vtable indirection overhead per field access.
 
 ***
+---
+
+## Encoded Size
+
+***
+
+### Single Product
+
+| Format  | Encoded Size |
+|---------|-------------|
+| JSON    | 345 B       |
+| Proto   | 148 B       |
+| FlatBuf | 268 B       |
+| Fluffr   | 256 B       |
+
+Fluffr produces a slightly smaller single-product buffer than FlatBuffers, and sits close to Proto at this payload size. JSON is the largest at 2.3× Fluffr.
+
+***
+
+### Registry Total Size
+
+| n      | JSON       | Proto      | FlatBuf    | Fluffr      |
+|--------|------------|------------|------------|------------|
+| 1      | 283 B      | 128 B      | 272 B      | 337 B      |
+| 10     | 3,047 B    | 1,380 B    | 2,324 B    | 2,254 B    |
+| 50     | 15,643 B   | 7,084 B    | 11,600 B   | 10,814 B   |
+| 500    | 158,824 B  | 72,664 B   | 116,000 B  | 110,323 B  |
+| 1,000  | 318,223 B  | 145,714 B  | 232,004 B  | 221,323 B  |
+| 10,000 | 3,246,002 B| 1,492,114 B| 2,368,004 B| 2,219,323 B|
+
+At n=1, Fluffr is slightly larger than FlatBuffers due to the columnar registry overhead having a higher fixed cost at small sizes. From n=10 onward it pulls ahead of FlatBuffers and continues to widen that gap at scale.
+
+***
+
+### Registry Bytes Per Item
+
+| n      | JSON    | Proto   | FlatBuf | Fluffr   |
+|--------|---------|---------|---------|---------|
+| 1      | 283.0 B | 128.0 B | 272.0 B | 337.0 B |
+| 10     | 304.7 B | 138.0 B | 232.4 B | 225.4 B |
+| 50     | 312.9 B | 141.7 B | 232.0 B | 216.3 B |
+| 500    | 317.6 B | 145.3 B | 232.0 B | 220.6 B |
+| 1,000  | 318.2 B | 145.7 B | 232.0 B | 221.3 B |
+| 10,000 | 324.6 B | 149.2 B | 236.8 B | 221.9 B |
+
+Per-item cost for Fluffr stabilizes around 221 B from n=500 onward and stays consistently below FlatBuffers (~232 B) at scale. Proto remains the most compact at ~149 B per item, reflecting its varint encoding. JSON grows slightly with scale as field names are repeated per record.
