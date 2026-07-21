@@ -1,6 +1,6 @@
 [package]
 name = "fluffr"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 description = "Bit-level serialization library designed for high-performance data access without requiring a parsing/unpacking step."
@@ -13,6 +13,6 @@ name = "fluffr"
 bytemuck = "1.25.2"
 
 
-fluffr_core  = "0.1.1"
-fluffr_derive = "0.1.1"
+fluffr_core  = "0.1.2"
+fluffr_derive = "0.1.2"
 
