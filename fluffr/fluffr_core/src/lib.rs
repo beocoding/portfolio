@@ -14,6 +14,7 @@ pub use filter::*;
 
 pub mod file_kind;
 pub use file_kind::*;
+
 pub trait Query<'a> {
     type QueryType;
     type Key: ReadAt<'a>;        // fixed per implementor, not per call

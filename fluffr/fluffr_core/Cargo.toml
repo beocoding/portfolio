@@ -6,4 +6,4 @@ license = "LicenseRef-Proprietary"
 description = "Core crate for Fluffr"
 
 [dependencies]
-bytemuck = { version = "1.25.0", features = ["derive"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }

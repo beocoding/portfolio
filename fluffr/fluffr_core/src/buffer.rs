@@ -190,8 +190,16 @@ impl Buffer for DefaultBuffer {
         let vtable_jump     = (vtable_slot as i32) - (table_slot as i32);
         let table_start_idx = self.len() - table_slot;
 
-        self.buffer_mut()[table_start_idx..table_start_idx + 4]
-            .copy_from_slice(&vtable_jump.to_le_bytes());
+        // Safety: `table_slot` addresses an already-written table object, so
+        // these 4 bytes are in bounds by construction.
+        debug_assert!(table_start_idx + 4 <= self.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                vtable_jump.to_le_bytes().as_ptr(),
+                self.buffer_mut().as_mut_ptr().add(table_start_idx),
+                4,
+            );
+        }
     }
 
     #[inline(always)]

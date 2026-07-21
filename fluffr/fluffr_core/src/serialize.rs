@@ -148,8 +148,16 @@ macro_rules! impl_serialize_scalar {
                 *buffer.head_mut() -= size;
                 *buffer.head_mut() &= !mask;
                 let head = buffer.head();
-                buffer.buffer_mut()[head..head + size]
-                    .copy_from_slice(&self.to_le_bytes());
+                // Safety: the `_unchecked` contract requires the caller to have
+                // called `ensure_capacity`, so `head + size <= len` holds.
+                debug_assert!(head + size <= buffer.len());
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.to_le_bytes().as_ptr(),
+                        buffer.buffer_mut().as_mut_ptr().add(head),
+                        size,
+                    );
+                }
                 buffer.slot()
             }
             #[inline(always)]
@@ -214,8 +222,15 @@ macro_rules! impl_serialize_str {
                 *buffer.head_mut() -= data_len;
                 *buffer.head_mut() &= !3;
                 let data_head = buffer.head();
-                buffer.buffer_mut()[data_head..data_head + data_len]
-                    .copy_from_slice(bytes);
+                // Safety: `_unchecked` contract — capacity already ensured.
+                debug_assert!(data_head + data_len <= buffer.len());
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        bytes.as_ptr(),
+                        buffer.buffer_mut().as_mut_ptr().add(data_head),
+                        data_len,
+                    );
+                }
                 // Step 2: write the u32 length prefix immediately before the data.
                 (data_len as u32).write_to_unchecked(buffer)
             }
@@ -248,6 +263,34 @@ impl_serialize_str!(&str, String);
 /// so that element 0 ends up at the lowest address, matching iteration order.
 /// A forward-offset table (n × u32) is then written pointing to each element's
 /// slot.  Finally the u32 length prefix is written before the offset table.
+// ── Scratch slot pool ─────────────────────────────────────────────────────────
+//
+// Offset-mode list serialization needs a temporary `slots: Vec<usize>` (one
+// entry per element) to build the jump table after the elements are written.
+// A thread-local *pool* of reusable Vecs eliminates the per-call heap
+// allocation.  It must be a pool rather than a single scratch because list
+// writes nest: a table element of an outer list may itself contain lists,
+// re-entering this code before the outer call returns.
+//
+// Panic safety: if the closure unwinds, the scratch Vec is simply not
+// returned to the pool (leaked capacity, no unsoundness).  The RefCell is
+// only borrowed momentarily around pop/push, never across `f`, so re-entrant
+// calls cannot double-borrow.
+thread_local! {
+    static SLOT_POOL: std::cell::RefCell<Vec<Vec<usize>>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+#[inline]
+fn with_slot_scratch<R>(cap: usize, f: impl FnOnce(&mut Vec<usize>) -> R) -> R {
+    let mut v = SLOT_POOL.with(|p| p.borrow_mut().pop()).unwrap_or_default();
+    v.clear();
+    v.reserve(cap);
+    let r = f(&mut v);
+    SLOT_POOL.with(|p| p.borrow_mut().push(v));
+    r
+}
+
 impl<T: Serialize> Serialize for &[T] {
     const SIZE: usize = 4;
     const ALIGN: usize = 4;
@@ -296,34 +339,42 @@ impl<T: Serialize> Serialize for &[T] {
             }
             _ => {
                 let len = self.len();
-                let mut slots = Vec::with_capacity(len);
-                // Write elements in reverse so element 0 is at the lowest address.
-                // In &[T]::write_to_unchecked, DataType::Union arm:
-                for s in self.iter().rev() {
-                    slots.push(Serialize::write_to_unchecked(s, buffer));
-                };
-                // Align to 4 bytes before the tag section — Table payloads (vtable = 6 bytes,
-                // not a multiple of 4) leave head misaligned, causing the jump alignment step
-                // to create a gap between tags and jumps so the reader sees the wrong byte.
-                *buffer.head_mut() &= !3;
-                let union_flag = T::MODE.is_union_flag() as usize;
-                let padding = (3 & (4-(len&3))) * union_flag;
-                *buffer.head_mut() -= padding;
-                for i in (0..len*union_flag).rev() {
-                    unsafe { self.get_unchecked(i).tag().write_to_unchecked(buffer) };
-                };
-                // Write the forward-offset table after all elements.
-                // Align first so the jump reflects the actual entry position.
-                for target_slot in slots {
-                    *buffer.head_mut() -= 4;
+                with_slot_scratch(len, |slots| {
+                    // Write elements in reverse so element 0 is at the lowest address.
+                    // In &[T]::write_to_unchecked, DataType::Union arm:
+                    for s in self.iter().rev() {
+                        slots.push(Serialize::write_to_unchecked(s, buffer));
+                    };
+                    // Align to 4 bytes before the tag section — Table payloads (vtable = 6 bytes,
+                    // not a multiple of 4) leave head misaligned, causing the jump alignment step
+                    // to create a gap between tags and jumps so the reader sees the wrong byte.
                     *buffer.head_mut() &= !3;
-                    let head = buffer.head();
-                    let jump = if target_slot == 0 { 0u32 }
-                        else { (buffer.slot() - target_slot) as u32 };
-                    buffer.buffer_mut()[head..head + 4]
-                        .copy_from_slice(&jump.to_le_bytes());
-                }
-                (len as u32).write_to_unchecked(buffer)
+                    let union_flag = T::MODE.is_union_flag() as usize;
+                    let padding = (3 & (4-(len&3))) * union_flag;
+                    *buffer.head_mut() -= padding;
+                    for i in (0..len*union_flag).rev() {
+                        unsafe { self.get_unchecked(i).tag().write_to_unchecked(buffer) };
+                    };
+                    // Write the forward-offset table after all elements.
+                    // Align first so the jump reflects the actual entry position.
+                    for &target_slot in slots.iter() {
+                        *buffer.head_mut() -= 4;
+                        *buffer.head_mut() &= !3;
+                        let head = buffer.head();
+                        let jump = if target_slot == 0 { 0u32 }
+                            else { (buffer.slot() - target_slot) as u32 };
+// Safety: `_unchecked` contract — capacity already ensured by caller.
+                        debug_assert!(head + 4 <= buffer.len());
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                jump.to_le_bytes().as_ptr(),
+                                buffer.buffer_mut().as_mut_ptr().add(head),
+                                4,
+                            );
+                        }
+                    }
+                    (len as u32).write_to_unchecked(buffer)
+                })
             }
         }
     }
@@ -414,32 +465,233 @@ where
             }
             _ => {
                 let len = self.len();
-                let mut slots = Vec::with_capacity(len);
-                // Write elements in reverse so element 0 is at the lowest address.
-                for i in (0..len).rev() {
-                    slots.push(Serialize::write_to_unchecked(&self.get(i), buffer));
-                }
-                *buffer.head_mut() &= !3;
-                let union_flag =T::MODE.is_union_flag() as usize;
-                let padding = (3 & (4-(len&3))) * union_flag;
-                *buffer.head_mut() -= padding;
-                for i in (0..len*union_flag).rev() {
-                    self.get(i).tag().write_to_unchecked(buffer);
-                };
-                // Write the forward-offset table after all elements.
-                // Align first so the jump reflects the actual entry position.
-                for target_slot in slots {
-                    *buffer.head_mut() -= 4;
+                with_slot_scratch(len, |slots| {
+                    // Write elements in reverse so element 0 is at the lowest address.
+                    for i in (0..len).rev() {
+                        slots.push(Serialize::write_to_unchecked(&self.get(i), buffer));
+                    }
                     *buffer.head_mut() &= !3;
-                    let head = buffer.head();
-                    let jump = (buffer.slot() - target_slot) as u32;
-                    buffer.buffer_mut()[head..head + 4]
-                        .copy_from_slice(&jump.to_le_bytes());
-                }
-                (len as u32).write_to_unchecked(buffer)
+                    let union_flag =T::MODE.is_union_flag() as usize;
+                    let padding = (3 & (4-(len&3))) * union_flag;
+                    *buffer.head_mut() -= padding;
+                    for i in (0..len*union_flag).rev() {
+                        self.get(i).tag().write_to_unchecked(buffer);
+                    };
+                    // Write the forward-offset table after all elements.
+                    // Align first so the jump reflects the actual entry position.
+                    for &target_slot in slots.iter() {
+                        *buffer.head_mut() -= 4;
+                        *buffer.head_mut() &= !3;
+                        let head = buffer.head();
+                        let jump = (buffer.slot() - target_slot) as u32;
+// Safety: `_unchecked` contract — capacity already ensured by caller.
+                        debug_assert!(head + 4 <= buffer.len());
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                jump.to_le_bytes().as_ptr(),
+                                buffer.buffer_mut().as_mut_ptr().add(head),
+                                4,
+                            );
+                        }
+                    }
+                    (len as u32).write_to_unchecked(buffer)
+                })
             }
         }
     }
     #[inline(always)]
     fn is_absent(&self) -> bool { self.is_empty() }
+}
+
+
+// ── Benchmarks ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod scalar_speed_bench {
+    use super::*;
+    use crate::buffer::DefaultBuffer;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    const N: usize = 1_000_000;
+
+    fn bench_hot<T: Serialize + Copy>(name: &str, sample: T) {
+        let mut buf = DefaultBuffer::default();
+
+        for _ in 0..1000 {
+            black_box(sample).write_to(black_box(&mut buf));
+        }
+        buf.reset();
+
+        let start = Instant::now();
+        for _ in 0..N {
+            let slot = black_box(sample).write_to(black_box(&mut buf));
+            black_box(slot);
+            if buf.head() < 64 {
+                buf.reset();
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {:<6} {:>9} iters in {:>12?}  ({:>6.2} ns/iter)",
+            name, N, elapsed, elapsed.as_nanos() as f64 / N as f64
+        );
+    }
+
+    fn bench_cold<T: Serialize + Copy>(name: &str, sample: T) {
+        const COLD_N: usize = 10_000;
+        let start = Instant::now();
+        for _ in 0..COLD_N {
+            let mut buf = DefaultBuffer::new(4);
+            let slot = black_box(sample).write_to(black_box(&mut buf));
+            black_box(slot);
+            black_box(&buf);
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {:<6} {:>9} iters in {:>12?}  ({:>6.2} ns/iter)  [cold: fresh 4B buffer/iter]",
+            name, COLD_N, elapsed, elapsed.as_nanos() as f64 / COLD_N as f64
+        );
+    }
+
+    #[test]
+    fn scalar_write_speed_hot() {
+        println!("\n=== Fluffr Serialize::write_to — hot path (reused buffer) ===");
+        bench_hot::<u8>("u8", 7u8);
+        bench_hot::<u16>("u16", 1234u16);
+        bench_hot::<u32>("u32", 123_456u32);
+        bench_hot::<u64>("u64", 123_456_789u64);
+        bench_hot::<u128>("u128", 123_456_789_012u128);
+        bench_hot::<f32>("f32", 3.14159f32);
+        bench_hot::<f64>("f64", 2.718281828f64);
+    }
+
+    #[test]
+    fn scalar_write_speed_cold() {
+        println!("\n=== Fluffr Serialize::write_to — cold path (fresh 4B buffer per call) ===");
+        bench_cold::<u8>("u8", 7u8);
+        bench_cold::<u32>("u32", 123_456u32);
+        bench_cold::<u64>("u64", 123_456_789u64);
+    }
+
+    fn bench_hot_str(name: &str, strings: &[&str], reset_below: usize) {
+        let mut buf = DefaultBuffer::new(8192);
+
+        for s in strings.iter().cycle().take(1000) {
+            black_box(*s).write_to(black_box(&mut buf));
+        }
+        buf.reset();
+
+        let start = Instant::now();
+        let mut idx = 0usize;
+        for _ in 0..N {
+            let s = black_box(strings[idx]);
+            idx = (idx + 1) % strings.len();
+            let slot = s.write_to(black_box(&mut buf));
+            black_box(slot);
+            if buf.head() < reset_below {
+                buf.reset();
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {:<10} {:>9} iters in {:>12?}  ({:>6.2} ns/iter)",
+            name, N, elapsed, elapsed.as_nanos() as f64 / N as f64
+        );
+    }
+
+    fn bench_hot_str_list(name: &str, list: &[&str], reset_below: usize) {
+        const LIST_N: usize = 100_000;
+        let mut buf = DefaultBuffer::new(1 << 16);
+
+        for _ in 0..100 {
+            black_box(list).write_to(black_box(&mut buf));
+        }
+        buf.reset();
+
+        let start = Instant::now();
+        for _ in 0..LIST_N {
+            let slot = black_box(list).write_to(black_box(&mut buf));
+            black_box(slot);
+            if buf.head() < reset_below {
+                buf.reset();
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {:<10} {:>9} iters in {:>12?}  ({:>6.2} ns/iter, {:.2} ns/elem)",
+            name, LIST_N, elapsed,
+            elapsed.as_nanos() as f64 / LIST_N as f64,
+            elapsed.as_nanos() as f64 / (LIST_N * list.len()) as f64
+        );
+    }
+
+    /// Hot-path bench for generic vector/slice writes (handles Case A: Packed Memcpy).
+    fn bench_hot_array<T: Serialize>(name: &str, slice: &[T], reset_below: usize) {
+        const ARRAY_N: usize = 100_000;
+        let mut buf = DefaultBuffer::new(1 << 16);
+
+        for _ in 0..100 {
+            black_box(slice).write_to(black_box(&mut buf));
+        }
+        buf.reset();
+
+        let start = Instant::now();
+        for _ in 0..ARRAY_N {
+            let slot = black_box(slice).write_to(black_box(&mut buf));
+            black_box(slot);
+            if buf.head() < reset_below {
+                buf.reset();
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {:<10} {:>9} iters in {:>12?}  ({:>6.2} ns/iter, {:.2} ns/elem)",
+            name, ARRAY_N, elapsed,
+            elapsed.as_nanos() as f64 / ARRAY_N as f64,
+            elapsed.as_nanos() as f64 / (ARRAY_N * slice.len()) as f64
+        );
+    }
+
+    #[test]
+    fn scalar_write_speed_strings() {
+        println!("\n=== Fluffr Serialize::write_to — strings (reused buffer) ===");
+
+        let short: Vec<&str> = vec!["hello", "world!", "seven77", "eight888"];
+        let medium: Vec<&str> = vec![
+            "the quick brown fox jumps ov",
+            "a somewhat longer string here!!",
+            "SKU-000042-PRODUCT-LABEL-EXAMPLE",
+        ];
+        let long_owned: String = "x".repeat(256);
+        let long: Vec<&str> = vec![long_owned.as_str()];
+
+        bench_hot_str("str~7B", &short, 64);
+        bench_hot_str("str~32B", &medium, 128);
+        bench_hot_str("str~256B", &long, 512);
+    }
+
+    #[test]
+    fn scalar_write_speed_arrays() {
+        println!("\n=== Fluffr Serialize::write_to — Arrays & Slices (reused buffer) ===");
+
+        // --- Case A: Inline elements (Packed memcpy fast path) ---
+        let u32_small = vec![10u32, 20, 30, 40];
+        let u32_large = vec![42u32; 128];
+        let f64_medium = vec![1.23f64, 4.56, 7.89, 0.12, 3.45, 6.78, 9.01, 2.34];
+
+        bench_hot_array("&[u32] x4", &u32_small, 256);
+        bench_hot_array("&[u32] x128", &u32_large, 1024);
+        bench_hot_array("&[f64] x8", &f64_medium, 512);
+
+        // --- Case B: Offset elements (Reverse sequence loop + forward offset jumps) ---
+        let str_small: Vec<&str> = vec!["tag-1", "common"];
+        let str_medium: Vec<&str> = vec![
+            "hello", "world!", "seven77", "eight888",
+            "a medium element here", "another one!", "yet more data", "last elem",
+        ];
+
+        bench_hot_str_list("&[&str] x2", &str_small, 256);
+        bench_hot_str_list("&[&str] x8", &str_medium, 1024);
+    }
 }

@@ -5,105 +5,126 @@ use quote::{format_ident, quote};
 
 use crate::*;
 
-// ── Serialize pass helpers — Owned ────────────────────────────────────────────
+// ── Shared codegen helpers ────────────────────────────────────────────────────
 
-fn owned_guard_and_write(f: &FieldMeta) -> (TokenStream2, TokenStream2) {
+/// Build a `where` clause from a possibly-empty list of bounds.
+fn where_clause(bounds: Vec<TokenStream2>) -> TokenStream2 {
+    if bounds.is_empty() { quote! {} } else { quote! { where #(#bounds),* } }
+}
+
+/// One bound per Table/Union field. These are the only categories whose view
+/// accessors return generated types, so PartialEq/Debug impls on views need
+/// explicit bounds for them.
+fn indirect_bounds(
+    meta:      &TableMeta,
+    per_field: impl Fn(&syn::Type) -> TokenStream2,
+) -> Vec<TokenStream2> {
+    meta.iter_fields()
+        .filter(|f| matches!(f.category, FieldCategory::Table | FieldCategory::Union))
+        .map(|f| per_field(&f.ty))
+        .collect()
+}
+
+/// Final vtable-hydration pass shared by owned serialize (pass 3), `merge_into`
+/// (pass 3), and `vtable_bytes`: for every present field, patch its u16 vtable
+/// entry with the distance from `base` to the field's recorded slot.
+fn vtable_hydrate(meta: &TableMeta, base: TokenStream2) -> TokenStream2 {
+    meta.iter_fields().map(|f| {
+        let slot_var    = f.slot_var();
+        let vtable_byte = f.vtable_byte();
+        quote! {
+            if #slot_var != 0usize {
+                let _off = (#base - #slot_var) as u16;
+                vtable[#vtable_byte..#vtable_byte + 2].copy_from_slice(&_off.to_le_bytes());
+            }
+        }
+    }).collect()
+}
+
+// ── Serialize pass generators (shared by owned and view paths) ────────────────
+//
+// Both paths use the same three-pass structure; they differ only in how a
+// field's presence is tested and how its value is fetched (`guard_write`), and
+// in whether slot variables must be kept up to date for a later pass 3
+// (`track_slots` — true for the owned path, false for the view path, which
+// reuses the source vtable verbatim and has no pass 3).
+
+type GuardWrite<'m> = &'m dyn Fn(&FieldMeta) -> (TokenStream2, TokenStream2);
+
+fn owned_guard_write(f: &FieldMeta) -> (TokenStream2, TokenStream2) {
     let absent   = f.is_absent_check();
     let accessor = &f.accessor;
     (quote! { !#absent }, quote! { #accessor })
 }
 
-fn owned_pass1(meta: &TableMeta) -> TokenStream2 {
-    let mut out = TokenStream2::new();
-    for f in meta.iter_by_complexity().filter(|f| f.category.is_indirect()) {
-        let slot_var       = f.slot_var();
-        let (guard, write) = owned_guard_and_write(f);
-        out.extend(quote! {
-            let mut #slot_var: usize = if #guard {
-                ::fluffr::Serialize::write_to_unchecked(&#write, buffer)
-            } else { 0usize };
-        });
-    }
-    out
-}
-
-fn owned_pass2(meta: &TableMeta) -> TokenStream2 {
-    meta.iter_fields_rev().map(|f| {
-        let slot_var       = f.slot_var();
-        let (guard, write) = owned_guard_and_write(f);
-        match &f.category {
-            FieldCategory::Inline => quote! {
-                let #slot_var: usize = if #guard {
-                    ::fluffr::Serialize::write_to_unchecked(&#write, buffer)
-                } else { 0usize };
-            },
-            FieldCategory::Union => quote! {
-                if #slot_var != 0usize {
-                    #slot_var = ::fluffr::write_union_slot(
-                        buffer, #slot_var, (#write).__flat_type_id()
-                    );
-                }
-            },
-            _ => quote! {
-                if #slot_var != 0usize {
-                    *buffer.head_mut() -= 4;
-                    *buffer.head_mut() &= !3;
-                    let _h = buffer.head();
-                    let _jump = (buffer.slot() - #slot_var) as u32;
-                    buffer.buffer_mut()[_h.._h + 4].copy_from_slice(&_jump.to_le_bytes());
-                    #slot_var = buffer.slot();
-                }
-            },
-        }
-    }).collect()
-}
-
-// ── Serialize pass helpers — View ─────────────────────────────────────────────
-
-fn view_guard_and_write(f: &FieldMeta) -> (TokenStream2, TokenStream2) {
+fn view_guard_write(f: &FieldMeta) -> (TokenStream2, TokenStream2) {
     let idx  = f.offset;
     let name = &f.label;
     (quote! { self.is_present(#idx) }, quote! { self.#name() })
 }
 
-fn view_pass1(meta: &TableMeta) -> TokenStream2 {
-    let mut out = TokenStream2::new();
-    for f in meta.iter_by_complexity().filter(|f| f.category.is_indirect()) {
-        let slot_var       = f.slot_var();
-        let (guard, write) = view_guard_and_write(f);
-        out.extend(quote! {
-            let mut #slot_var: usize = if #guard {
-                ::fluffr::Serialize::write_to_unchecked(&#write, buffer)
-            } else { 0usize };
-        });
-    }
-    out
+/// Pass 1 — write every indirect field's payload (most complex first) and
+/// record its slot in a `let mut slot_<field>` binding.
+fn serialize_pass1(meta: &TableMeta, guard_write: GuardWrite) -> TokenStream2 {
+    meta.iter_by_complexity()
+        .filter(|f| f.category.is_indirect())
+        .map(|f| {
+            let slot_var       = f.slot_var();
+            let (guard, write) = guard_write(f);
+            quote! {
+                let mut #slot_var: usize = if #guard {
+                    ::fluffr::Serialize::write_to_unchecked(&#write, buffer)
+                } else { 0usize };
+            }
+        })
+        .collect()
 }
 
-fn view_pass2(meta: &TableMeta) -> TokenStream2 {
+/// Pass 2 — walk fields in reverse declaration order emitting the table
+/// object itself: inline values directly, 5-byte slots for unions, and 4-byte
+/// forward offsets for all other indirect fields.
+fn serialize_pass2(meta: &TableMeta, guard_write: GuardWrite, track_slots: bool) -> TokenStream2 {
     meta.iter_fields_rev().map(|f| {
         let slot_var       = f.slot_var();
-        let (guard, write) = view_guard_and_write(f);
+        let (guard, write) = guard_write(f);
         match &f.category {
-            FieldCategory::Inline => quote! {
-                if #guard { ::fluffr::Serialize::write_to_unchecked(&#write, buffer); }
-            },
-            FieldCategory::Union => quote! {
-                // Write the union slot; no pass3 in view_serialize so slot_var
-                // is intentionally not reassigned here.
-                if #slot_var != 0usize {
-                    ::fluffr::write_union_slot(
-                        buffer, #slot_var, (#write).__flat_type_id()
-                    );
+            FieldCategory::Inline => if track_slots {
+                quote! {
+                    let #slot_var: usize = if #guard {
+                        ::fluffr::Serialize::write_to_unchecked(&#write, buffer)
+                    } else { 0usize };
+                }
+            } else {
+                quote! {
+                    if #guard { ::fluffr::Serialize::write_to_unchecked(&#write, buffer); }
                 }
             },
-            _ => quote! {
-                if #slot_var != 0usize {
-                    *buffer.head_mut() -= 4;
-                    *buffer.head_mut() &= !3;
-                    let _h = buffer.head();
-                    let _jump = (buffer.slot() - #slot_var) as u32;
-                    buffer.buffer_mut()[_h.._h + 4].copy_from_slice(&_jump.to_le_bytes());
+            FieldCategory::Union => {
+                let call = quote! {
+                    ::fluffr::write_union_slot(buffer, #slot_var, (#write).__flat_type_id())
+                };
+                let stmt = if track_slots { quote! { #slot_var = #call; } } else { quote! { #call; } };
+                quote! { if #slot_var != 0usize { #stmt } }
+            },
+            _ => {
+                let record = if track_slots { quote! { #slot_var = buffer.slot(); } } else { quote! {} };
+                quote! {
+                    if #slot_var != 0usize {
+                        *buffer.head_mut() -= 4;
+                        *buffer.head_mut() &= !3;
+                        let _h = buffer.head();
+                        let _jump = (buffer.slot() - #slot_var) as u32;
+                        // Safety: `_unchecked` contract — capacity ensured by caller.
+                        debug_assert!(_h + 4 <= buffer.len());
+                        unsafe {
+                            ::std::ptr::copy_nonoverlapping(
+                                _jump.to_le_bytes().as_ptr(),
+                                buffer.buffer_mut().as_mut_ptr().add(_h),
+                                4,
+                            );
+                        }
+                        #record
+                    }
                 }
             },
         }
@@ -120,7 +141,7 @@ fn impl_serialize(
     body:        TokenStream2,
     is_absent:   TokenStream2,
 ) -> TokenStream2 {
-    let object_size = meta.field_metas.len() * 2 + 4;
+    let object_size = meta.vtable_size; // fields * 2 + 4 — same shape as the vtable
     quote! {
         impl #generics ::fluffr::Serialize for #ty {
             const SIZE: usize = 4;
@@ -147,27 +168,15 @@ fn impl_serialize(
 
 // ── View PartialEq + Debug ────────────────────────────────────────────────────
 
-/// Generated for every Table derive so that LabelView can be compared by value,
-/// enabling RowRef ↔ RowRef and View ↔ RowRef PartialEq impls to compile.
+/// Generated for every Table derive so that LabelView can be compared by value.
 fn impl_view_eq_and_debug(meta: &TableMeta) -> TokenStream2 {
     let view_label = format_ident!("{}View", &meta.label);
     let label_str  = meta.label.to_string();
 
     // PartialEq: two views are equal if every field accessor returns equal values.
-    // Where bounds are needed for table/union return types.
-    let eq_bounds: Vec<TokenStream2> = meta.iter_fields()
-        .filter(|f| matches!(f.category, FieldCategory::Table | FieldCategory::Union))
-        .map(|f| {
-            let ty = &f.ty;
-            quote! { <#ty as ::fluffr::ReadAt<'a>>::ReadOutput: PartialEq }
-        })
-        .collect();
-
-    let eq_where = if eq_bounds.is_empty() {
-        quote! {}
-    } else {
-        quote! { where #(#eq_bounds),* }
-    };
+    let eq_where = where_clause(indirect_bounds(meta, |ty| {
+        quote! { <#ty as ::fluffr::ReadAt<'a>>::ReadOutput: PartialEq }
+    }));
 
     let eq_fields = join_and(meta.iter_fields().map(|f| {
         let name = &f.label;
@@ -175,19 +184,9 @@ fn impl_view_eq_and_debug(meta: &TableMeta) -> TokenStream2 {
     }).collect());
 
     // Debug: print struct-like representation with field names and values.
-    let debug_bounds: Vec<TokenStream2> = meta.iter_fields()
-        .filter(|f| matches!(f.category, FieldCategory::Table | FieldCategory::Union))
-        .map(|f| {
-            let ty = &f.ty;
-            quote! { <#ty as ::fluffr::ReadAt<'a>>::ReadOutput: ::std::fmt::Debug }
-        })
-        .collect();
-
-    let debug_where = if debug_bounds.is_empty() {
-        quote! {}
-    } else {
-        quote! { where #(#debug_bounds),* }
-    };
+    let debug_where = where_clause(indirect_bounds(meta, |ty| {
+        quote! { <#ty as ::fluffr::ReadAt<'a>>::ReadOutput: ::std::fmt::Debug }
+    }));
 
     let debug_fields: TokenStream2 = meta.iter_fields().map(|f| {
         let name     = &f.label;
@@ -211,22 +210,15 @@ fn impl_view_eq_and_debug(meta: &TableMeta) -> TokenStream2 {
     }
 }
 
+// ── Owned Debug ───────────────────────────────────────────────────────────────
 
-// ── Main codegen ──────────────────────────────────────────────────────────────
 fn impl_table_debug(meta: &TableMeta) -> TokenStream2 {
     let label     = &meta.label;
     let label_str = label.to_string();
 
-    let debug_bounds: Vec<TokenStream2> = meta.iter_fields()
-        .filter(|f| matches!(f.category, FieldCategory::Table | FieldCategory::Union))
-        .map(|f| { let ty = &f.ty; quote! { #ty: ::std::fmt::Debug } })
-        .collect();
-
-    let where_clause = if debug_bounds.is_empty() {
-        quote! {}
-    } else {
-        quote! { where #(#debug_bounds),* }
-    };
+    let where_tokens = where_clause(indirect_bounds(meta, |ty| {
+        quote! { #ty: ::std::fmt::Debug }
+    }));
 
     let debug_fields: TokenStream2 = meta.iter_fields().map(|f| {
         let name_str = f.label.to_string();
@@ -235,7 +227,7 @@ fn impl_table_debug(meta: &TableMeta) -> TokenStream2 {
     }).collect();
 
     quote! {
-        impl ::std::fmt::Debug for #label #where_clause {
+        impl ::std::fmt::Debug for #label #where_tokens {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.debug_struct(#label_str)
                     #debug_fields
@@ -244,6 +236,7 @@ fn impl_table_debug(meta: &TableMeta) -> TokenStream2 {
         }
     }
 }
+
 fn impl_owned_field_accessors(meta: &TableMeta) -> TokenStream2 {
     let label = &meta.label;
     let methods: TokenStream2 = meta.iter_fields().map(|f| {
@@ -257,19 +250,24 @@ fn impl_owned_field_accessors(meta: &TableMeta) -> TokenStream2 {
     }).collect();
     quote! { impl #label { #methods } }
 }
-/// All Table impls for `#[derive(Table)]`, minus `impl_owned_view_eq` which is
-/// added separately so it appears last and doesn't interfere with the Row path.
-fn impl_table_core(meta: &TableMeta) -> TokenStream2 {
-    let owned_ser   = impl_owned_serialize(meta);
-    let view        = impl_view(meta);
-    let view_ser    = impl_view_serialize(meta);
-    let read_at     = impl_read_at_trait(meta);
-    let verify      = impl_verify(meta);
-    let view_eq     = impl_view_eq_and_debug(meta);
-    let table_debug = impl_table_debug(meta);
-    let vtable_gen  = impl_vtable_gen(meta);
-    let field_access = impl_owned_field_accessors(meta);
-    let owned_eq = impl_owned_self_eq(meta);
+
+// ── Main codegen ──────────────────────────────────────────────────────────────
+
+pub fn flat_table(input: TokenStream) -> TokenStream {
+    let meta = analyze_meta(parse_macro_input!(input as DeriveInput));
+
+    let owned_ser     = impl_owned_serialize(&meta);
+    let view          = impl_view(&meta);
+    let view_ser      = impl_view_serialize(&meta);
+    let read_at       = impl_read_at_trait(&meta);
+    let verify        = impl_verify(&meta);
+    let view_eq       = impl_view_eq_and_debug(&meta);
+    let owned_eq      = impl_owned_self_eq(&meta);
+    let table_debug   = impl_table_debug(&meta);
+    let field_access  = impl_owned_field_accessors(&meta);
+    let vtable_gen    = impl_vtable_gen(&meta);
+    let owned_view_eq = impl_owned_view_eq(&meta);
+
     quote! {
         #owned_ser
         #view
@@ -281,14 +279,8 @@ fn impl_table_core(meta: &TableMeta) -> TokenStream2 {
         #table_debug
         #field_access
         #vtable_gen
-    }
-}
-
-pub fn flat_table(input: TokenStream) -> TokenStream {
-    let meta          = analyze_meta(parse_macro_input!(input as DeriveInput));
-    let core          = impl_table_core(&meta);
-    let owned_view_eq = impl_owned_view_eq(&meta);
-    quote! { #core #owned_view_eq }.into()
+        #owned_view_eq
+    }.into()
 }
 
 // ── Owned serialize ───────────────────────────────────────────────────────────
@@ -297,19 +289,9 @@ fn impl_owned_serialize(meta: &TableMeta) -> TokenStream2 {
     let label      = &meta.label;
     let view_label = format_ident!("{}View", label);
 
-    let pass1 = owned_pass1(meta);
-    let pass2 = owned_pass2(meta);
-
-    let pass3: TokenStream2 = meta.iter_fields().map(|f| {
-        let slot_var      = f.slot_var();
-        let vtable_offset = 4 + f.offset * 2;
-        quote! {
-            if #slot_var != 0usize {
-                let _off = (table_start_slot - #slot_var) as u16;
-                vtable[#vtable_offset..#vtable_offset + 2].copy_from_slice(&_off.to_le_bytes());
-            }
-        }
-    }).collect();
+    let pass1 = serialize_pass1(meta, &owned_guard_write);
+    let pass2 = serialize_pass2(meta, &owned_guard_write, true);
+    let pass3 = vtable_hydrate(meta, quote! { table_start_slot });
 
     let body = quote! {
         use ::fluffr::Table;
@@ -331,8 +313,7 @@ fn impl_owned_serialize(meta: &TableMeta) -> TokenStream2 {
         quote! { table_size += ::fluffr::Serialize::size_hint(&#a); }
     }).collect();
 
-    let checks: Vec<TokenStream2> = meta.iter_fields().map(|f| f.is_absent_check()).collect();
-    let is_absent = if checks.is_empty() { quote! { true } } else { quote! { #(#checks)&&* } };
+    let is_absent = join_and(meta.iter_fields().map(|f| f.is_absent_check()).collect());
 
     let serialize_impl = impl_serialize(quote! {}, &quote! { #label }, meta, size_tokens, body, is_absent);
     quote! {
@@ -357,14 +338,7 @@ fn impl_block_end(meta: &TableMeta) -> TokenStream2 {
                 let end_expr = gen_list_block_end(inner, ty);
                 quote! { let list = self.#name(); if list.len > 0 { return #end_expr; } }
             }
-            FieldCategory::String => quote! {
-                if self.is_present(0) {
-                    let field_pos = self.t_pos + self.voff(0);
-                    let abs = field_pos + u32::read_at(self.buf, field_pos) as usize;
-                    return abs + 4 + u32::read_at(self.buf, abs) as usize;
-                }
-            },
-            FieldCategory::FileBlob => quote! {
+            FieldCategory::String | FieldCategory::FileBlob => quote! {
                 if self.is_present(0) {
                     let field_pos = self.t_pos + self.voff(0);
                     let abs = field_pos + u32::read_at(self.buf, field_pos) as usize;
@@ -401,8 +375,8 @@ fn impl_block_end(meta: &TableMeta) -> TokenStream2 {
 
 fn impl_view_serialize(meta: &TableMeta) -> TokenStream2 {
     let view_label = format_ident!("{}View", &meta.label);
-    let pass1 = view_pass1(meta);
-    let pass2 = view_pass2(meta);
+    let pass1 = serialize_pass1(meta, &view_guard_write);
+    let pass2 = serialize_pass2(meta, &view_guard_write, false);
 
     let body = quote! {
         #pass1
@@ -469,115 +443,7 @@ fn impl_view(meta: &TableMeta) -> TokenStream2 {
         }
     }).collect();
 
-    let merge_method = if meta.merge {
-        let table_label = &meta.label;
-
-        let merge_pass1: TokenStream2 = meta.iter_by_complexity().map(|f| {
-            let slot_var = f.slot_var();
-            let name     = &f.label;
-            match &f.category {
-                FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::Inline) => {
-                    let elem_ty = extract_vec_inner(&f.ty).expect("List(Inline) must be Vec<T>");
-                    quote! {
-                        let mut #slot_var = ::fluffr::merge_inline_list(
-                            &_views, out,
-                            ::std::mem::size_of::<#elem_ty>(),
-                            ::std::mem::align_of::<#elem_ty>().max(4) - 1,
-                            |_v| _v.#name(),
-                        );
-                    }
-                },
-                FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::String) => {
-                    quote! { let mut #slot_var = ::fluffr::merge_string_list(&_views, out, |_v| _v.#name()); }
-                },
-
-                FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::FileBlob) => {
-                    let ty       = &f.ty;
-                    let inner_ty = extract_vec_inner(ty).unwrap_or(ty);
-                    quote! {
-                        let mut #slot_var = ::fluffr::merge_file_list(
-                            &_views, out,
-                            |_v| -> ::fluffr::ListView<'_, #inner_ty> { _v.#name() }
-                        );
-                    }
-                },
-                FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::Table) => {
-                    quote! {
-                        let mut #slot_var = ::fluffr::merge_table_list(
-                            &_views, out, |_v| _v.#name(), |_el| _el.block_end(),
-                        );
-                    }
-                },
-                FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::Union) => {
-                    quote! { let mut #slot_var = ::fluffr::merge_union_list(&_views, out, |_v| _v.#name()); }
-                },
-                _ => quote! {
-                    let mut _temp: Vec<usize> = Vec::new();
-                    for view in _views.iter() {
-                        for elem in view.#name().rev() {
-                            _temp.push(::fluffr::Serialize::write_to_unchecked(&elem, out));
-                        }
-                    }
-                    let _len = _temp.len() as u32;
-                    for target_slot in _temp {
-                        *out.head_mut() -= 4;
-                        *out.head_mut() &= !3;
-                        let _head = out.head();
-                        let _jump = (out.slot() - target_slot) as u32;
-                        out.buffer_mut()[_head.._head + 4].copy_from_slice(&_jump.to_le_bytes());
-                    }
-                    let mut #slot_var = if _len == 0 { 0usize } else { _len.write_to_unchecked(out) };
-                },
-            }
-        }).collect();
-
-        let merge_pass2: TokenStream2 = meta.iter_fields_rev().map(|f| {
-            let slot_var = f.slot_var();
-            quote! {
-                if #slot_var != 0usize {
-                    let _jump = (out.slot() + 4 - #slot_var) as u32;
-                    #slot_var = _jump.write_to_unchecked(out);
-                }
-            }
-        }).collect();
-
-        let merge_pass3: TokenStream2 = meta.iter_fields().map(|f| {
-            let slot_var      = f.slot_var();
-            let vtable_offset = 4 + f.offset * 2;
-            quote! {
-                if #slot_var != 0usize {
-                    let _off = (table_start_slot - #slot_var) as u16;
-                    vtable[#vtable_offset..#vtable_offset + 2].copy_from_slice(&_off.to_le_bytes());
-                }
-            }
-        }).collect();
-
-        quote! {
-            #[inline(never)]
-            pub fn merge_into<B: ::fluffr::Buffer>(
-                &self, buffer: &'a [u8], slots: &[usize], out: &mut B,
-            ) {
-                out.reset();
-                let _views: Vec<Self> = slots.iter()
-                    .map(|&slot| Self::from_slot(buffer, slot))
-                    .chain(std::iter::once(*self))
-                    .collect();
-                let mut vtable = <#table_label as ::fluffr::Table>::VTABLE_TEMPLATE;
-                #merge_pass1
-                let table_end_slot = out.slot();
-                #merge_pass2
-                *out.head_mut() -= 4;
-                let table_start_slot = out.slot();
-                let tsize = (table_start_slot - table_end_slot) as u16;
-                vtable[2..4].copy_from_slice(&tsize.to_le_bytes());
-                #merge_pass3
-                out.share_vtable(&vtable, table_start_slot);
-                out.finish(table_start_slot);
-            }
-        }
-    } else {
-        quote! {}
-    };
+    let merge_method = if meta.merge { impl_merge_into(meta) } else { quote! {} };
 
     quote! {
         #[derive(Clone, Copy, Default)]
@@ -606,6 +472,128 @@ fn impl_view(meta: &TableMeta) -> TokenStream2 {
             type Target = ::fluffr::RawView<'a>;
             #[inline(always)]
             fn deref(&self) -> &Self::Target { &self.0 }
+        }
+    }
+}
+
+// ── merge_into (generated only when every field is a list) ────────────────────
+
+fn impl_merge_into(meta: &TableMeta) -> TokenStream2 {
+    let table_label = &meta.label;
+
+    let merge_pass1: TokenStream2 = meta.iter_by_complexity().map(|f| {
+        let slot_var = f.slot_var();
+        let name     = &f.label;
+        match &f.category {
+            FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::Inline) => {
+                let elem_ty = vec_inner(&f.ty).expect("List(Inline) must be Vec<T>");
+                quote! {
+                    let mut #slot_var = ::fluffr::merge_inline_list(
+                        &_views, out,
+                        ::std::mem::size_of::<#elem_ty>(),
+                        ::std::mem::align_of::<#elem_ty>().max(4) - 1,
+                        |_v| _v.#name(),
+                    );
+                }
+            },
+            FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::String) => {
+                quote! { let mut #slot_var = ::fluffr::merge_string_list(&_views, out, |_v| _v.#name()); }
+            },
+            FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::FileBlob) => {
+                let ty       = &f.ty;
+                let inner_ty = vec_inner(ty).unwrap_or(ty);
+                quote! {
+                    let mut #slot_var = ::fluffr::merge_file_list(
+                        &_views, out,
+                        |_v| -> ::fluffr::ListView<'_, #inner_ty> { _v.#name() }
+                    );
+                }
+            },
+            FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::Table) => {
+                quote! {
+                    let mut #slot_var = ::fluffr::merge_table_list(
+                        &_views, out, |_v| _v.#name(), |_el| _el.block_end(),
+                    );
+                }
+            },
+            FieldCategory::List(inner) if matches!(inner.as_ref(), FieldCategory::Union) => {
+                quote! { let mut #slot_var = ::fluffr::merge_union_list(&_views, out, |_v| _v.#name()); }
+            },
+            _ => quote! {
+                let mut _temp: Vec<usize> = Vec::new();
+                for view in _views.iter() {
+                    for elem in view.#name().rev() {
+                        _temp.push(::fluffr::Serialize::write_to_unchecked(&elem, out));
+                    }
+                }
+                let _len = _temp.len() as u32;
+                for target_slot in _temp {
+                    *out.head_mut() -= 4;
+                    *out.head_mut() &= !3;
+                    let _head = out.head();
+                    let _jump = (out.slot() - target_slot) as u32;
+                    // Safety: capacity ensured by merge preamble.
+                    debug_assert!(_head + 4 <= out.len());
+                    unsafe {
+                        ::std::ptr::copy_nonoverlapping(
+                            _jump.to_le_bytes().as_ptr(),
+                            out.buffer_mut().as_mut_ptr().add(_head),
+                            4,
+                        );
+                    }
+                }
+                let mut #slot_var = if _len == 0 { 0usize } else { _len.write_to_unchecked(out) };
+            },
+        }
+    }).collect();
+
+    let merge_pass2: TokenStream2 = meta.iter_fields_rev().map(|f| {
+        let slot_var = f.slot_var();
+        quote! {
+            if #slot_var != 0usize {
+                let _jump = (out.slot() + 4 - #slot_var) as u32;
+                #slot_var = _jump.write_to_unchecked(out);
+            }
+        }
+    }).collect();
+
+    let merge_pass3 = vtable_hydrate(meta, quote! { table_start_slot });
+
+    quote! {
+        #[inline(never)]
+        pub fn merge_into<B: ::fluffr::Buffer>(
+            &self, buffer: &'a [u8], slots: &[usize], out: &mut B,
+        ) {
+            out.reset();
+            // Small-count fast path: views are Copy, so up to 16 sources are
+            // assembled on the stack, avoiding a per-merge heap allocation.
+            let _n = slots.len() + 1;
+            let mut _stack: [Self; 16] = [Self::default(); 16];
+            let mut _heap: Vec<Self>;
+            let _views: &[Self] = if _n <= 16 {
+                for (_i, &_slot) in slots.iter().enumerate() {
+                    _stack[_i] = Self::from_slot(buffer, _slot);
+                }
+                _stack[slots.len()] = *self;
+                &_stack[.._n]
+            } else {
+                _heap = slots.iter()
+                    .map(|&slot| Self::from_slot(buffer, slot))
+                    .chain(::std::iter::once(*self))
+                    .collect();
+                &_heap
+            };
+            let mut vtable = <#table_label as ::fluffr::Table>::VTABLE_TEMPLATE;
+            #merge_pass1
+            let table_end_slot = out.slot();
+            #merge_pass2
+            *out.head_mut() -= 4;
+            let table_start_slot = out.slot();
+            let tsize = (table_start_slot - table_end_slot) as u16;
+            vtable[2..4].copy_from_slice(&tsize.to_le_bytes());
+            #merge_pass3
+            out.share_vtable(&vtable, table_start_slot);
+            out.finish(table_start_slot);
         }
     }
 }
@@ -657,21 +645,6 @@ fn impl_read_at_trait(meta: &TableMeta) -> TokenStream2 {
 
 // ── Verify ────────────────────────────────────────────────────────────────────
 
-fn extract_vec_inner(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
-            if seg.ident == "Vec" {
-                if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
-                        return Some(inner);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
 fn emit_field_verify(f: &FieldMeta) -> TokenStream2 {
     let ty = &f.ty;
     match &f.category {
@@ -690,21 +663,20 @@ fn emit_field_verify(f: &FieldMeta) -> TokenStream2 {
         },
         FieldCategory::List(inner) => match inner.as_ref() {
             FieldCategory::Inline => {
-                let elem_size = extract_vec_inner(ty)
+                let elem_size = vec_inner(ty)
                     .map(|it| quote! { ::std::mem::size_of::<#it>() })
                     .unwrap_or(quote! { 1usize });
                 quote! { ::fluffr::verify_scalar_array(buf, field_pos, #elem_size)?; }
             }
             FieldCategory::String => quote! { ::fluffr::verify_string_array(buf, field_pos)?; },
             FieldCategory::FileBlob => quote! { ::fluffr::verify_file_field(buf, field_pos)?; },
-
             FieldCategory::Table  => {
-                let inner_ty = extract_vec_inner(ty).expect("#[array(table)] must be Vec<T>");
+                let inner_ty = vec_inner(ty).expect("#[array(table)] must be Vec<T>");
                 quote! { ::fluffr::verify_table_array::<#inner_ty>(buf, field_pos, depth - 1, out)?; }
             }
             FieldCategory::List(_) => quote! { ::fluffr::verify_scalar_array(buf, field_pos, 4)?; },
             FieldCategory::Union   => {
-                let inner_ty = extract_vec_inner(ty).expect("List(Union) must be Vec<T>");
+                let inner_ty = vec_inner(ty).expect("List(Union) must be Vec<T>");
                 quote! {
                     ::fluffr::check_bounds(buf, field_pos, 4, "union-array forward-offset")?;
                     let _hdr       = field_pos.saturating_add(u32::read_at(buf, field_pos) as usize);
@@ -763,43 +735,29 @@ fn impl_verify(meta: &TableMeta) -> TokenStream2 {
         }
     }
 }
-// ── Owned ↔ View PartialEq (generated for every Table, not just Row) ─────────
+
+// ── Owned ↔ View PartialEq ────────────────────────────────────────────────────
 
 fn impl_owned_view_eq(meta: &TableMeta) -> TokenStream2 {
     let label      = &meta.label;
     let view_label = format_ident!("{}View", label);
 
-    // Where bounds for table/union fields.
-    let bounds: Vec<TokenStream2> = meta.iter_fields()
-        .filter(|f| matches!(f.category, FieldCategory::Table | FieldCategory::Union))
-        .map(|f| {
-            let ty = &f.ty;
-            quote! { #ty: PartialEq<<#ty as ::fluffr::ReadAt<'a>>::ReadOutput> }
-        })
-        .collect();
-
-    let where_clause = if bounds.is_empty() {
-        quote! {}
-    } else {
-        quote! { where #(#bounds),* }
-    };
+    let where_tokens = where_clause(indirect_bounds(meta, |ty| {
+        quote! { #ty: PartialEq<<#ty as ::fluffr::ReadAt<'a>>::ReadOutput> }
+    }));
 
     let eq_fields = join_and(meta.iter_fields().map(|f| {
         let accessor = &f.accessor; // self or self.field_name
-        let name     = &f.label;   // for the view accessor call
-        match &f.category {
-            FieldCategory::String => quote! { #accessor == other.#name() },
-            _                     => quote! { #accessor == other.#name() },
-        }
+        let name     = &f.label;    // for the view accessor call
+        quote! { #accessor == other.#name() }
     }).collect());
 
-
     quote! {
-        impl<'a> PartialEq<#view_label<'a>> for #label #where_clause {
+        impl<'a> PartialEq<#view_label<'a>> for #label #where_tokens {
             #[inline]
             fn eq(&self, other: &#view_label<'a>) -> bool { #eq_fields }
         }
-        impl<'a> PartialEq<#label> for #view_label<'a> #where_clause {
+        impl<'a> PartialEq<#label> for #view_label<'a> #where_tokens {
             #[inline]
             fn eq(&self, other: &#label) -> bool { other == self }
         }
@@ -811,16 +769,9 @@ fn impl_owned_view_eq(meta: &TableMeta) -> TokenStream2 {
 fn impl_owned_self_eq(meta: &TableMeta) -> TokenStream2 {
     let label = &meta.label;
 
-    let bounds: Vec<TokenStream2> = meta.iter_fields()
-        .filter(|f| matches!(f.category, FieldCategory::Table | FieldCategory::Union))
-        .map(|f| { let ty = &f.ty; quote! { #ty: PartialEq } })
-        .collect();
-
-    let where_clause = if bounds.is_empty() {
-        quote! {}
-    } else {
-        quote! { where #(#bounds),* }
-    };
+    let where_tokens = where_clause(indirect_bounds(meta, |ty| {
+        quote! { #ty: PartialEq }
+    }));
 
     let eq_fields = join_and(meta.iter_fields().map(|f| {
         let m = format_ident!("field_{}", f.offset);
@@ -828,25 +779,22 @@ fn impl_owned_self_eq(meta: &TableMeta) -> TokenStream2 {
     }).collect());
 
     quote! {
-        impl PartialEq for #label #where_clause {
+        impl PartialEq for #label #where_tokens {
             #[inline]
             fn eq(&self, other: &Self) -> bool { #eq_fields }
         }
     }
 }
+
 // ── List block-end helper ─────────────────────────────────────────────────────
 
 fn gen_list_block_end(inner: &FieldCategory, ty: &syn::Type) -> TokenStream2 {
     match inner {
         FieldCategory::Inline => {
-            let elem_ty = extract_vec_inner(ty).expect("List(Inline) must be Vec<T>");
+            let elem_ty = vec_inner(ty).expect("List(Inline) must be Vec<T>");
             quote! { list.offset + list.len * ::std::mem::size_of::<#elem_ty>() }
         }
-        FieldCategory::String => quote! {{
-            let _last = list.abs_pos(list.len - 1);
-            _last + 4 + u32::read_at(list.buf, _last) as usize
-        }},
-        FieldCategory::FileBlob => quote! {{
+        FieldCategory::String | FieldCategory::FileBlob => quote! {{
             let _last = list.abs_pos(list.len - 1);
             _last + 4 + u32::read_at(list.buf, _last) as usize
         }},
@@ -856,7 +804,7 @@ fn gen_list_block_end(inner: &FieldCategory, ty: &syn::Type) -> TokenStream2 {
             quote! {{ let list = list.read_last(); #inner_end }}
         }
         FieldCategory::Union => {
-            let inner_ty = extract_vec_inner(ty).expect("List(Union) must be Vec<T>");
+            let inner_ty = vec_inner(ty).expect("List(Union) must be Vec<T>");
             quote! {{
                 let _last     = list.len() - 1;
                 let _last_pos = list.abs_pos(_last);
@@ -867,9 +815,10 @@ fn gen_list_block_end(inner: &FieldCategory, ty: &syn::Type) -> TokenStream2 {
     }
 }
 
-// ── AsRow derive ──────────────────────────────────────────────────────────────
+// ── VTable precomputation ─────────────────────────────────────────────────────
 
-
+/// `vtable_bytes()` — compute this owned value's vtable (and object size)
+/// without serializing, by replaying pass 2's reverse walk arithmetically.
 fn impl_vtable_gen(meta: &TableMeta) -> TokenStream2 {
     let label       = &meta.label;
     let vtable_size = meta.vtable_size;
@@ -891,16 +840,7 @@ fn impl_vtable_gen(meta: &TableMeta) -> TokenStream2 {
         }
     }).collect();
 
-    let forward_hydrate: TokenStream2 = meta.iter_fields().map(|f| {
-        let vtable_byte = 4 + f.offset * 2;
-        let slot_var    = f.slot_var();
-        quote! {
-            if #slot_var != 0 {
-                vtable[#vtable_byte..#vtable_byte + 2]
-                    .copy_from_slice(&((object_size - #slot_var) as u16).to_le_bytes());
-            }
-        }
-    }).collect();
+    let forward_hydrate = vtable_hydrate(meta, quote! { object_size });
 
     quote! {
         impl #label {

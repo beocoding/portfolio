@@ -283,7 +283,11 @@ where
         *out.head_mut() &= !3;
         let h    = out.head();
         let jump = (out.slot() - tgt_slot) as u32;
-        out.buffer_mut()[h..h + 4].copy_from_slice(&jump.to_le_bytes());
+        // Safety: capacity ensured before this jump-table write.
+        debug_assert!(h + 4 <= out.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(jump.to_le_bytes().as_ptr(), out.buffer_mut().as_mut_ptr().add(h), 4);
+        }
     }
 
     if total_len == 0 { 0 } else { total_len.write_to_unchecked(out) }
@@ -303,8 +307,13 @@ pub fn write_union_slot<B: Buffer>(buffer: &mut B, data_slot: usize, tag: u8) ->
     *buffer.head_mut() &= !3;
     let head = buffer.head();
     let jump = (buffer.slot() - data_slot) as u32;
-    buffer.buffer_mut()[head..head + 4].copy_from_slice(&jump.to_le_bytes());
-    buffer.buffer_mut()[head + 4] = tag;
+    // Safety: `_unchecked` contract — 5 bytes of capacity ensured by caller.
+    debug_assert!(head + 5 <= buffer.len());
+    unsafe {
+        let p = buffer.buffer_mut().as_mut_ptr().add(head);
+        std::ptr::copy_nonoverlapping(jump.to_le_bytes().as_ptr(), p, 4);
+        *p.add(4) = tag;
+    }
     buffer.slot()
 }
 /// Merge a `List(Union)` field across multiple views.
@@ -393,7 +402,11 @@ where
         let h    = out.head();
         let jump = if target_slot == 0 { 0u32 }
                    else { (out.slot() - target_slot) as u32 };
-        out.buffer_mut()[h..h + 4].copy_from_slice(&jump.to_le_bytes());
+        // Safety: capacity ensured before this jump-table write.
+        debug_assert!(h + 4 <= out.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(jump.to_le_bytes().as_ptr(), out.buffer_mut().as_mut_ptr().add(h), 4);
+        }
     }
 
     (total_n as u32).write_to_unchecked(out)

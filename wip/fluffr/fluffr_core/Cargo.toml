@@ -1,0 +1,9 @@
+[package]
+name = "fluffr_core"
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-Proprietary"
+description = "Core crate for Fluffr"
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }

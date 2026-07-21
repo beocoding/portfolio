@@ -1,0 +1,56 @@
+// schemas/product.fbs
+
+namespace bench_fbs;
+
+enum Category : uint8 {
+    None        = 0,
+    Electronics = 1,
+    Apparel     = 2,
+    Home        = 3,
+    Grocery     = 4,
+    Other       = 5,
+}
+
+struct Dimensions {
+    width:  float;
+    height: float;
+    depth:  float;
+}
+
+table Brand {
+    name: string;
+}
+
+table LinkBySku {
+    sku: string;
+}
+
+table LinkByDims {
+    dims: Dimensions;
+}
+
+union ProductLink {
+    LinkBySku,
+    LinkByDims,
+    Brand,
+}
+
+table Product {
+    sku:         string;
+    label:       string;
+    slug:        string;
+    description: string;
+    brand:       Brand;
+    tags:        [string];
+    category:    Category;
+    price:       float;
+    weight:      float;
+    dimensions:  Dimensions;
+    link:        ProductLink;
+}
+
+table ProductRegistry {
+    products: [Product];
+}
+
+root_type Product;

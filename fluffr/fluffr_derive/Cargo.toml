@@ -1,6 +1,6 @@
 [package]
 name = "fluffr_derive"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 description = "derive macros for fluffr"
@@ -9,8 +9,8 @@ description = "derive macros for fluffr"
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full"] }
+syn = { version = "3.0.2", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-fluffr_core = { version = "0.1.0"}
+fluffr_core = { version = "0.1.1"}
 

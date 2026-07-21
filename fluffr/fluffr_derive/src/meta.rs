@@ -47,6 +47,10 @@ pub struct FieldMeta {
 impl FieldMeta {
     pub fn slot_var(&self) -> Ident { format_ident!("slot_{}", self.label) }
 
+    /// Byte position of this field's u16 entry inside the vtable
+    /// (4-byte header, then 2 bytes per field in declaration order).
+    pub fn vtable_byte(&self) -> usize { 4 + self.offset * 2 }
+
     pub fn is_absent_check(&self) -> TokenStream2 {
         let a = &self.accessor;
         if let Some(default) = &self.default_val {

@@ -1,10 +1,19 @@
 #import bevy_pbr::mesh_view_bindings::view
 
+
+struct SdfConfig {
+    kind:   u8,
+    op:     u8,
+    smooth: u8,        // unorm8 over [0, 4^scale]
+    scale:  u8,        // log4 class; for plane kinds: class of |offset|
+    params: [i16; 4],  // snorm16 over ±4^scale
+}
+
 struct VertexInput {
-    @location(0) altitude: f32,
-    @location(1) normal: u32,
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: SdfConfig,
     @builtin(vertex_index) vertex_idx: u32,
-    @builtin(instance_index) tile_id: u32,
+    @builtin(instance_index) instance_idx: u32,
 }
 
 struct VertexOutput {

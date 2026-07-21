@@ -1,6 +1,6 @@
 [package]
 name = "fluffr"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 description = "Bit-level serialization library designed for high-performance data access without requiring a parsing/unpacking step."
@@ -10,7 +10,7 @@ readme = "README.md"
 name = "fluffr"
 
 [dependencies]
-bytemuck = "1.25.0"
+bytemuck = "1.25.2"
 
 
 fluffr_core  = "0.1.0"

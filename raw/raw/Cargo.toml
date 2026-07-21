@@ -1,0 +1,10 @@
+[package]
+name = "raw"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["macros"]
+
+[dependencies]
+macros = { path = "./macros" }
