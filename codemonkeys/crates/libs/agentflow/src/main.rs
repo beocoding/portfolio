@@ -1,5 +1,5 @@
 // src/main.rs
-use agent_flow::{ctx::Ctx, log::log_request, model::ticket::ModelController, web::{self, routes_login}};
+use agent_flow::{config, ctx::Ctx, log::log_request, model::ticket::ModelController, web::{self, routes_login, routes_static::{self, serve_dir}}};
 use axum::{
     Json, Router, http::{Method, Uri}, middleware, response::{IntoResponse, Response},
 };
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             web::mw_auth::mw_ctx_resolver)
         )
         .layer(CookieManagerLayer::new())
-        .fallback_service(routes_static());
+        .fallback_service(serve_dir(&config().WEB_FOLDER));
 
     // region: Start Server
     let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
@@ -87,7 +87,6 @@ async fn main_response_mapper(
     
     // Build and log the server log line
     let client_error = client_status_error.unzip().1;
-    log_request(uuid, req_method, uri, ctx, service_error, client_error).await;
-    println!();
+    _ = log_request(uuid, req_method, uri, ctx, service_error, client_error).await;
     error_response.unwrap_or(res)
 }
