@@ -23,6 +23,8 @@ pub enum Error {
     // Explicitly use the full path here too
     #[from]
     ModelError(ModelError),
+
+    ConfigMissingEnv(&'static str)
 }
 
 // region:    --- Custom
