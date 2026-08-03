@@ -21,7 +21,7 @@ pub use fluffr_core::{
 };
 
 // Re-export the derive macro
-pub use fluffr_derive::{Row,Table, FlatUnion, Flat};
+pub use fluffr_derive::{Row, Flat};
 
 #[doc(hidden)]
 pub mod __private {
@@ -47,5 +47,5 @@ pub mod prelude {
         filter::*,
         file_kind::*,
     };
-    pub use fluffr_derive::{Row,Table, FlatUnion, Flat};
+    pub use fluffr_derive::{Row, Flat};
 }

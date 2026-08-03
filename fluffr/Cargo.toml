@@ -1,6 +1,6 @@
 [package]
 name = "fluffr"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 license = "LicenseRef-Proprietary"
 description = "Bit-level serialization library designed for high-performance data access without requiring a parsing/unpacking step."
@@ -12,7 +12,9 @@ name = "fluffr"
 [dependencies]
 bytemuck = "1.25.2"
 
-
-fluffr_core  = "0.1.2"
-fluffr_derive = "0.1.2"
+# `path` is used for local builds; `cargo publish` strips it automatically
+# and ships the `version` requirement instead, so this works unmodified in
+# both local dev and on crates.io.
+fluffr_core = { path = "fluffr_core", version = "0.2.0" }
+fluffr_derive = { path = "fluffr_derive", version = "0.2.0" }
 

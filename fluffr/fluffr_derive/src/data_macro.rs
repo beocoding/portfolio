@@ -1,23 +1,13 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
-
-
-pub fn flat(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    match &input.data {
-        Data::Struct(_) => flat_struct(input),
-        Data::Enum(_)   => flat_enum(input),
-        Data::Union(_)  => panic!("Flat cannot be derived for unions"),
-    }
-}
+use syn::{Data, DeriveInput, Fields};
 
 
 // ── Enum ──────────────────────────────────────────────────────────────────────
 
 
-fn flat_enum(input: DeriveInput) -> TokenStream {
+pub(crate) fn flat_enum(input: DeriveInput) -> TokenStream {
     let name = &input.ident;
 
     let repr = get_repr_int(&input.attrs).unwrap_or_else(|| {
@@ -127,7 +117,7 @@ fn flat_enum(input: DeriveInput) -> TokenStream {
 // ── Struct ────────────────────────────────────────────────────────────────────
 
 
-fn flat_struct(input: DeriveInput) -> TokenStream {
+pub(crate) fn flat_struct(input: DeriveInput) -> TokenStream {
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
