@@ -52,9 +52,12 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
+use std::io;
+use std::path::Path;
 
-use crate::Table;
 use crate::serialize::SerializeBytes;
+use crate::reverse_index::ReverseIndex;
+use crate::verify::{Verify, VerifyError, verify_root};
 
 // ── Hasher ────────────────────────────────────────────────────────────────────
 
@@ -188,7 +191,7 @@ impl Buffer for DefaultBuffer {
         };
 
         let vtable_jump     = (vtable_slot as i32) - (table_slot as i32);
-        let table_start_idx = self.len() - table_slot;
+        let table_start_idx = ReverseIndex::from_slot(table_slot).invert(self.len());
 
         // Safety: `table_slot` addresses an already-written table object, so
         // these 4 bytes are in bounds by construction.
@@ -202,11 +205,19 @@ impl Buffer for DefaultBuffer {
         }
     }
 
-    #[inline(always)]
-    fn load<T: Table>(bytes: &[u8]) -> Self {
-        let size = bytes.len();
-        let buffer = Self::new(size);
-        buffer
+    /// Verify `bytes` against `T`'s schema, then take ownership of it
+    /// directly as this buffer's backing storage — no copy. `bytes` must
+    /// already be a finished buffer (e.g. one returned by [`Buffer::bytes`]
+    /// as an owned `Vec`) so it's flush against its own end and slot-based
+    /// offsets inside it keep resolving correctly.
+    #[inline]
+    fn load<T: Verify>(bytes: Vec<u8>) -> Result<Self, VerifyError> {
+        verify_root::<T>(&bytes)?;
+        Ok(Self {
+            buffer:  bytes,
+            head:    0,
+            vtables: HashMap::with_hasher(BuildVTableHasher),
+        })
     }
 }
 
@@ -262,8 +273,10 @@ pub trait Buffer {
     /// `new_cap - old_cap`.
     fn grow(&mut self, new_cap: usize);
 
-    /// Deserialize a finished flatbuffer into this buffer type.
-    fn load<T>(bytes: &[u8]) -> Self where T: Table;
+    /// Verify `bytes` against `T`'s schema, then take ownership of it as
+    /// this buffer's backing storage — no copy. See [`verify_root`] for what
+    /// verification checks.
+    fn load<T>(bytes: Vec<u8>) -> Result<Self, VerifyError> where T: Verify, Self: Sized;
 
     // ── Provided ──────────────────────────────────────────────────────────────
 
@@ -306,7 +319,9 @@ pub trait Buffer {
     /// It remains valid across `grow()` calls because growing shifts data
     /// right by exactly the amount `head` is incremented.
     #[inline(always)]
-    fn slot(&self) -> usize { self.len() - self.head() }
+    fn slot(&self) -> usize {
+        ReverseIndex::from_absolute(self.head(), self.len()).val()
+    }
 
     /// Align `head` downward to `alignment` bytes (must be a power of two).
     #[inline(always)]
@@ -328,13 +343,30 @@ pub trait Buffer {
     #[inline(always)]
     fn finish(&mut self, slot: usize) -> &[u8] {
         self.ensure_capacity(4);
-        let table_pos = self.len() - slot;
+        let table_pos = ReverseIndex::from_slot(slot).invert(self.len());
         *self.head_mut() -= 4;
         let head = self.head();
         let relative_offset = (table_pos - head) as u32;
         self.buffer_mut()[head..head + 4]
             .copy_from_slice(&relative_offset.to_le_bytes());
         self.bytes()
+    }
+
+    /// Write `self.bytes()` to `<dir>/<filename>.fluff`.
+    ///
+    /// `filename` is cleaned before use: any directory components or
+    /// existing extension are stripped (via `Path::file_stem`), and the
+    /// `.fluff` extension is always appended. This guarantees the file lands
+    /// at exactly `<dir>/<filename>.fluff` and can't be redirected outside
+    /// `dir` by a crafted `filename`.
+    #[inline]
+    fn save_to(&self, dir: impl AsRef<Path>, filename: &str) -> io::Result<()> {
+        let stem = Path::new(filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(filename);
+        let path = dir.as_ref().join(format!("{stem}.fluff"));
+        std::fs::write(path, self.bytes())
     }
 }
 
@@ -373,7 +405,7 @@ impl<B: Buffer> Buffer for &mut B {
         (**self).share_vtable(vt, slot)
     }
     #[inline(always)]
-    fn load<T: crate::Table>(_: &[u8]) -> Self {
+    fn load<T: crate::Verify>(_: Vec<u8>) -> Result<Self, VerifyError> {
         panic!("Buffer::load on &mut B — not supported")
     }
 }

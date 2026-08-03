@@ -21,7 +21,7 @@ pub struct Point {
 
 // ── Nested table ──────────────────────────────────────────────────────────────
 
-#[derive(Table, Default, Clone)]
+#[derive(Flat, Default, Clone)]
 pub struct Inner {
     pub id: u32,
     pub name: String,
@@ -29,7 +29,7 @@ pub struct Inner {
 
 // ── FlatUnion ─────────────────────────────────────────────────────────────────
 
-#[derive(FlatUnion, Clone, Debug)]
+#[derive(Flat, Clone, Debug)]
 #[repr(u8)]
 pub enum Shape {
     None = 0,
@@ -44,7 +44,7 @@ impl Default for Shape {
 
 // ── Root table exercising every field category ────────────────────────────────
 
-#[derive(Table, Default, Clone)]
+#[derive(Flat, Default, Clone)]
 pub struct Root {
     pub a: u32,
     pub s: String,
@@ -61,7 +61,7 @@ pub struct Root {
 
 // ── Merge-capable table (all list fields) ─────────────────────────────────────
 
-#[derive(Table, Default, Clone)]
+#[derive(Flat, Default, Clone)]
 pub struct Reg {
     pub nums: Vec<u32>,
     pub names: Vec<String>,
@@ -85,20 +85,20 @@ fn sample_root() -> Root {
 
 // ── extra fixture types ───────────────────────────────────────────────────────
 
-#[derive(Table, Default, Clone)]
+#[derive(Flat, Default, Clone)]
 pub struct Many {
     #[array(table)]
     pub items: Vec<Inner>,
 }
 
-#[derive(Table, Default, Clone)]
+#[derive(Flat, Default, Clone)]
 pub struct Mid {
     pub tag: u32,
     #[table]
     pub inner: Inner,
 }
 
-#[derive(Table, Default, Clone)]
+#[derive(Flat, Default, Clone)]
 pub struct Outer {
     pub tag: u32,
     #[table]
@@ -107,7 +107,7 @@ pub struct Outer {
 
 // ── ROW-ONLY SECTION: delete from here to the matching marker if you use the
 // Row-REMOVED macro variant ──────────────────────────────────────────────────
-#[derive(Table, Row, Default, Clone)]
+#[derive(Flat, Row, Default, Clone)]
 pub struct Person {
     #[key]
     pub id: u32,

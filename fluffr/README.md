@@ -8,9 +8,10 @@
 - [Quickstart](#quickstart)
   - [Supported Primitive Types](#supported-primitive-types)
   - [Derives](#derives)
-    - [#[derive(Table)]](#derivetable)
     - [#[derive(Flat)]](#deriveflat)
-    - [#[derive(FlatUnion)]](#deriveflatunion)
+      - [Table fields](#table-fields)
+      - [Flat fields](#flat-fields)
+      - [Tagged unions](#tagged-unions)
     - [#[derive(Row)]](#deriverow)
   - [Buffer Trait](#buffer-trait)
     - [DefaultBuffer](#defaultbuffer)
@@ -69,11 +70,11 @@ Because fields are located by vtable offset rather than position, schemas can gr
 
 -**Arrays** — `Vec<T>` and `&[T]` are supported for any serializable element type. Inline element types (scalars, `Flat` structs) are packed as a contiguous block preceded by a length prefix. Offset element types (strings, tables) are written individually and referenced through a forward-offset table.
 
--**`Flat` structs and enums** — any type deriving `Flat` is treated as an inline scalar and stored as its raw little-endian bytes.
+-**Flat structs and enums** — a `#[repr(C)]` struct, or a `#[repr(...)]` enum with only unit variants, deriving `Flat` is treated as an inline scalar and stored as its raw little-endian bytes.
 
--**`Table` types** — any type deriving `Table` can be serialized as a nested field, referenced via a forward offset from the parent table.
+-**Table types** — any other struct deriving `Flat` (no `#[repr(C)]`) can be serialized as a nested field, referenced via a forward offset from the parent table.
 
--**`FlatUnion` enums** — stored as a 5-byte slot: a 4-byte forward offset to the payload and a 1-byte tag identifying the variant.
+-**Tagged union enums** — an enum deriving `Flat` with at least one payload variant is stored as a 5-byte slot: a 4-byte forward offset to the payload and a 1-byte tag identifying the variant.
 
 <br>
 
@@ -82,28 +83,42 @@ Because fields are located by vtable offset rather than position, schemas can gr
 ## Derives
 
 ***
-### #[derive(Table)]
-use #[derive(Table)] on any struct to make it serializable. Tables can have the following attributes per field:
+### #[derive(Flat)]
+
+`#[derive(Flat)]` is the single derive macro for everything in Fluffr. It inspects the shape of the item it's applied to and dispatches to the right encoding at compile time — there is nothing else to pick:
+
+| Item shape | Encoding |
+|---|---|
+| struct, `#[repr(C)]` | inline POD ([Flat fields](#flat-fields)) |
+| struct, no `#[repr(C)]` | offset/vtable table ([Table fields](#table-fields)) |
+| enum, all unit variants | inline POD discriminant ([Flat fields](#flat-fields)) |
+| enum, any variant holds a payload | tagged union ([Tagged unions](#tagged-unions)) |
+
+`#[derive(Row)]` layers on top of a `#[derive(Flat)]` struct and is documented separately below.
+
+***
+#### Table fields
+use `#[derive(Flat)]` on a struct without `#[repr(C)]` to make it serializable as a table. Table fields can have the following attributes per field:
 
 - scalar — plain numeric types and #[repr(C)] POD structs
 - string — String or &str
 - table — a nested table struct
-- union — a FlatUnion enum
+- union — a tagged-union enum (also derived with `#[derive(Flat)]`)
 - file — a FileBlob<T> typed binary blob
 - array(scalar) / array(string) / array(table) / array(union) / array(file) — a Vec<T> of any of the above
 
-```#[derive(Table)]``` is capable of automatically detecting any fields that are not Tables or Unions. Fields that are Table or Union types must be annotated using ```#[table]``` or ```#[union]```, respectively. Attributing a ```Vec<Table>``` as ```#[table]``` or ```Vec<Union>``` field as ```#[union]``` is also automatically detected as ```#[array(table)]``` or ```#[array(union)]```, respectively.
+`#[derive(Flat)]` is capable of automatically detecting any fields that are not tables or unions. Fields that are table or union types must be annotated using ```#[table]``` or ```#[union]```, respectively. Attributing a ```Vec<Table>``` as ```#[table]``` or ```Vec<Union>``` field as ```#[union]``` is also automatically detected as ```#[array(table)]``` or ```#[array(union)]```, respectively.
 <br> <br>
-#### Table Example with field attributes:
+##### Table example with field attributes:
 ```rust
 use fluffr::prelude::*;
 
-#[derive(Table, Clone, Default)]
+#[derive(Flat, Clone, Default)]
 pub struct BrandData {
     #[string]  pub name: String,
 }
 
-#[derive(Table, Default)]
+#[derive(Flat, Default)]
 pub struct Product {
     #[table]   pub brand:      BrandData,
     #[string]  pub sku:        String,
@@ -115,17 +130,17 @@ pub struct Product {
 
 <br>
 
-#### Example with auto-field attributes:
+##### Example with auto-field attributes:
 
 ```rust
 use fluffr::prelude::*;
 
-#[derive(Table, Clone, Default)]
+#[derive(Flat, Clone, Default)]
 pub struct BrandData {
     pub name: String,
 }
 
-#[derive(Table, Default)]
+#[derive(Flat, Default)]
 pub struct Product {
     #[table]	
     pub brand:      BrandData,
@@ -142,7 +157,7 @@ pub struct Product {
 
 ### Methods
 
-`#[derive(Table)]` generates the following methods on the struct and its companion view type:
+On a table-shaped item, `#[derive(Flat)]` generates the following methods on the struct and its companion view type:
 
 **On the owned struct:**
 
@@ -163,15 +178,15 @@ pub struct Product {
 
 ***
 
-### #[derive(Flat)]
+#### Flat fields
 
-`#[derive(Flat)]` marks a type as an inline scalar value — stored directly in the buffer with no indirection. It can be applied to both structs and enums.
+A struct or enum marked `#[repr(C)]` / `#[repr(...)]` (see below) and derived with `#[derive(Flat)]` is treated as an inline scalar value — stored directly in the buffer with no indirection.
 
 <br>
 
-#### NewTypes
+##### NewTypes
 
-A `Flat` struct must be a Plain Old Data type: all fields must themselves be `Flat`, and the struct must be `#[repr(C)]`. It is stored and read back as raw bytes with no vtable overhead.
+A Flat struct must be a Plain Old Data type: all fields must themselves be Flat, and the struct must be `#[repr(C)]`. It is stored and read back as raw bytes with no vtable overhead.
 
 ```rust
 #[repr(C)]
@@ -183,13 +198,13 @@ pub struct Dimensions {
 }
 ```
 
-A `Flat` struct can then be used as a `#[scalar]` field inside a `Table`.
+A Flat struct can then be used as a `#[scalar]` field inside a table.
 
 <br>
 
-#### Enums
+##### Enums
 
-A `Flat` enum must have a primitive `#[repr(...)]` attribute. It is stored as its underlying integer type and transmuted back on read.
+A Flat enum (an enum with only unit variants) must have a primitive `#[repr(...)]` attribute. It is stored as its underlying integer type and transmuted back on read.
 
 ```rust
 #[derive(Flat, Clone, Copy, Default)]
@@ -204,20 +219,20 @@ pub enum ProductCategory {
 }
 ```
 
-Like `Flat` structs, `Flat` enums are used as `#[scalar]` fields inside a `Table`.
+Like Flat structs, Flat enums are used as `#[scalar]` fields inside a table.
 
 <br>
 
 ***
 
-### #[derive(Union)]
+#### Tagged unions
 
-`#[derive(FlatUnion)]` marks an enum as a discriminated union — a field that can hold one of several typed variants. Unions must be `#[repr(u8)]` and must have a unit variant with discriminant `0` to serve as the absent/none sentinel.
+An enum derived with `#[derive(Flat)]` where at least one variant holds a payload is treated as a discriminated union instead of an inline POD discriminant — a field that can hold one of several typed variants. Tagged-union enums must be `#[repr(u8)]` and must have a unit variant with discriminant `0` to serve as the absent/none sentinel.
 
-Each non-none variant holds a single payload, which can be a `String`, a `Flat` scalar struct, or a nested `Table`.
+Each non-none variant holds a single payload, which can be a `String`, a Flat scalar struct, or a nested table.
 
 ```rust
-#[derive(FlatUnion, Clone, Default)]
+#[derive(Flat, Clone, Default)]
 #[repr(u8)]
 pub enum ProductLink {
     #[default]
@@ -228,10 +243,10 @@ pub enum ProductLink {
 }
 ```
 
-A `FlatUnion` is used as a `#[union]` field inside a `Table`:
+A tagged-union enum is used as a `#[union]` field inside a table:
 
 ```rust
-#[derive(Table, Default)]
+#[derive(Flat, Default)]
 pub struct Product {
     #[string] pub sku:   String,
     #[scalar] pub price: f32,
@@ -257,10 +272,10 @@ match view.link() {
 
 ### `#[derive(Row)]`
 
-`#[derive(Row)]` can be added to any struct that also derives `Table`. It generates a companion registry type that stores each field as its own packed column — a struct-of-arrays layout rather than the default array-of-structs. This makes it well suited to query-heavy workloads where you need to scan a single field across many records without touching the rest.
+`#[derive(Row)]` can be added to any struct that also derives `Flat` as a table (i.e. without `#[repr(C)]`). It generates a companion registry type that stores each field as its own packed column — a struct-of-arrays layout rather than the default array-of-structs. This makes it well suited to query-heavy workloads where you need to scan a single field across many records without touching the rest.
 
 ```rust
-#[derive(Row, Table, Clone, Default)]
+#[derive(Row, Flat, Clone, Default)]
 pub struct Product {
     #[table]  pub brand:      BrandData,
     pub sku:        String,
@@ -270,7 +285,7 @@ pub struct Product {
 }
 ```
 
-This generates a `ProductRegistry` struct where each field becomes a `Vec<T>` column, and a `ProductRegistryView` for zero-copy reading. The registry itself derives `Table`, so it serializes and reads back through the same buffer machinery as any other table.
+This generates a `ProductRegistry` struct where each field becomes a `Vec<T>` column, and a `ProductRegistryView` for zero-copy reading. The registry itself derives `Flat` as a table, so it serializes and reads back through the same buffer machinery as any other table.
 
 <br>
 
@@ -380,7 +395,7 @@ Per-type bounds are as follows: scalars return `size_of::<T>() + align_of::<T>()
 ### write_to<S: Serialize, B: Buffer>(&S, buf: &mut B) -> usize
 
 
-`write_to` is available on any type that implements `Serialize` — including primitives, strings, `Flat` structs and enums, `FlatUnion` enums, arrays, and `Table` structs. It writes the value into the provided buffer and returns a slot — a stable offset from the end of the buffer — that identifies where the value was written.
+`write_to` is available on any type that implements `Serialize` — including primitives, strings, Flat structs and enums, tagged-union enums, arrays, and Table structs. It writes the value into the provided buffer and returns a slot — a stable offset from the end of the buffer — that identifies where the value was written.
 
 ```rust
 let mut buf = DefaultBuffer::default();
@@ -402,9 +417,9 @@ Fields that are in their default or zero state are not written to the buffer at 
 
 For simple scalar values or strings, those get written directly into the next slot of the Buffer.  
 
-For structs that are derived as `Flat`, the fields are serialized in the order they are declared in. For structs that are derived as 'Table', it becomes a bit more nuanced. Vtable slots are assigned in declaration order, so field positions are stable and predictable. Internally, serialization uses a two-pass approach: indirect fields (strings, tables, unions, arrays) are written before the table object that references them, as required by the backward-growing buffer layout. This is an implementation detail and has no effect on how fields are declared or accessed.
+For structs that derive as Flat (`#[repr(C)]`), the fields are serialized in the order they are declared in. For structs that derive as a table (no `#[repr(C)]`), it becomes a bit more nuanced. Vtable slots are assigned in declaration order, so field positions are stable and predictable. Internally, serialization uses a two-pass approach: indirect fields (strings, tables, unions, arrays) are written before the table object that references them, as required by the backward-growing buffer layout. This is an implementation detail and has no effect on how fields are declared or accessed.
 
-For FlatUnion types, the write order of the payload follows the same rules as the inner type — inline for Flat scalars and structs, two-pass for nested Table payloads, and offset-based for String payloads.
+For tagged-union types, the write order of the payload follows the same rules as the inner type — inline for Flat scalars and structs, two-pass for nested Table payloads, and offset-based for String payloads.
 
 
 <br>
@@ -446,10 +461,10 @@ Decodes a value from `buf` at the given absolute byte position. The type returne
 | `String` / `&str` | `&'a str` — a zero-copy borrow into `buf` |
 | `Vec<T>` | `ListView<'a, T>` |
 | `Flat` struct or enum | `Self` — read back as raw bytes and reinterpreted inline |
-| `#[derive(Table)]` struct | The generated `{TypeName}View<'a>` (e.g. `ProductView<'a>`) — a zero-copy handle into the buffer |
-| `#[derive(FlatUnion)]` enum | The generated `{TypeName}View<'a>` enum (e.g. `ProductLinkView<'a>`) — a matched variant holding the decoded payload |
+| `#[derive(Flat)]` table struct | The generated `{TypeName}View<'a>` (e.g. `ProductView<'a>`) — a zero-copy handle into the buffer |
+| `#[derive(Flat)]` tagged-union enum | The generated `{TypeName}View<'a>` enum (e.g. `ProductLinkView<'a>`) — a matched variant holding the decoded payload |
 
-The `MODE` constant on each implementation tells the parent table whether this field's bytes are stored inline at the field position (`Inline`) or whether the field position holds a forward offset to the actual data (`Offset`). `Flat` types are always `Inline` — their bytes sit directly at the field position and are reinterpreted in place with no indirection. `Table` and `FlatUnion` views are always `Offset` — the field position holds a forward offset to the actual data, and the view borrows from the buffer at that location. This distinction is resolved at compile time and requires no branching at runtime.
+The `MODE` constant on each implementation tells the parent table whether this field's bytes are stored inline at the field position (`Inline`) or whether the field position holds a forward offset to the actual data (`Offset`). `Flat` types are always `Inline` — their bytes sit directly at the field position and are reinterpreted in place with no indirection. Table and tagged-union views are always `Offset` — the field position holds a forward offset to the actual data, and the view borrows from the buffer at that location. This distinction is resolved at compile time and requires no branching at runtime.
 
 ***
 

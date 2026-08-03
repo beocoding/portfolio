@@ -1,12 +1,11 @@
 // fluffr/flatr_derive/src/union.rs
 use proc_macro::TokenStream;
 use quote::format_ident;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Fields};
 use quote::quote;
 
 
-pub fn flat_union(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+pub(crate) fn flat_union_from(input: DeriveInput) -> TokenStream {
     validate(&input);
     emit(&input)
 }

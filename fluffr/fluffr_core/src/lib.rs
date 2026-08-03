@@ -2,6 +2,7 @@
 pub mod serialize;
 pub mod read;
 pub mod buffer;
+pub mod reverse_index;
 use std::borrow::Cow;
 use bytemuck::{Pod, Zeroable};
 pub mod verify;

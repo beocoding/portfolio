@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use syn::{DeriveInput, parse_macro_input};
+use syn::DeriveInput;
 use quote::{format_ident, quote};
 
 use crate::*;
@@ -253,8 +253,8 @@ fn impl_owned_field_accessors(meta: &TableMeta) -> TokenStream2 {
 
 // ── Main codegen ──────────────────────────────────────────────────────────────
 
-pub fn flat_table(input: TokenStream) -> TokenStream {
-    let meta = analyze_meta(parse_macro_input!(input as DeriveInput));
+pub(crate) fn flat_table_from(input: DeriveInput) -> TokenStream {
+    let meta = analyze_meta(input);
 
     let owned_ser     = impl_owned_serialize(&meta);
     let view          = impl_view(&meta);

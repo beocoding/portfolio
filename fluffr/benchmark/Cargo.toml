@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 bytemuck = "1.25.0"
 flatbuffers = "25.12.19"
-fluffr = "0.1.0"
+fluffr = { path = "../", version = "0.2.0" }
 prost = "0.14.3"
 serde = {version = "1.0.228", features = ["derive"]}
 serde_json = "1.0.149"
