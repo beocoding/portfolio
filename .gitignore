@@ -9,6 +9,7 @@
 .env.local
 
 # IDE
+.claude/
 .vscode/
 .idea/
 *.iml
