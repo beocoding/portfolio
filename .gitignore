@@ -1,6 +1,8 @@
 # Build output
 /target/
 **/target/
+# Trunk (wasm) build output — deployed copies live under docs/
+**/dist/
 # Cargo lock (keep for binaries, ignore for libraries)
 # Cargo.lock  ← uncomment this line if your crate is a library
 

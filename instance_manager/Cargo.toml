@@ -1,5 +1,5 @@
 [package]
-name = "instance_manager"  # <-- This name should match what you're importing
+name = "instance_manager"
 version = "0.1.0"
 edition = "2021"
 
