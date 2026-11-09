@@ -43,7 +43,7 @@ A tile-based procedural terrain system for Bevy built around a multi-draw indire
 
 A real-time rigid body physics engine implementing **Extended Position-Based Dynamics** (Müller et al., SIGGRAPH 2020), with distance, hinge, servo, and mouse-driven grab constraints running on a sub-stepped solver fully decoupled from Bevy's render loop. Compiles natively or to WebAssembly via Trunk.
 
-**[Live interactive demo →](https://beocoding.github.io/Portfolio/xpbd/demo/)** — drag the bodies and watch the constraints solve in real time.
+**[Live interactive demo →](https://beocoding.github.io/portfolio/xpbd/demo/)** — drag the bodies and watch the constraints solve in real time.
 
 **Tech:** Rust · Bevy ECS · WebAssembly (WebGL2) · custom XPBD solver
 **Read more:** [xpbd/README.md](xpbd/README.md)
