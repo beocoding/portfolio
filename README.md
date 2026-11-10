@@ -7,6 +7,8 @@ Systems and graphics programming in Rust — GPU-driven rendering pipelines, a f
 ![WebAssembly](https://img.shields.io/badge/webassembly-654FF0?style=flat-square&logo=webassembly&logoColor=white)
 ![WGSL](https://img.shields.io/badge/shaders-WGSL-blue?style=flat-square)
 
+**[→ View the project showcase](https://beocoding.github.io/portfolio/)** with live demos, screenshots, and benchmarks all in one place.
+
 ---
 
 ## Projects
@@ -28,6 +30,8 @@ A custom voxel rendering engine on top of Bevy. Greedy meshing, instanced render
 ### [Terrain Generator](terrain/)
 
 A tile-based procedural terrain system for Bevy built around a multi-draw indirect render pipeline, a custom slot-map instance manager, and a double-buffered GPU upload system. Like the voxel engine, CPU draw call overhead is **O(1)** regardless of tile count — the render world is a strict one-directional consumer of noise and mesh data generated on the main world.
+
+**[Live interactive demo →](https://beocoding.github.io/portfolio/terrain/demo/)** — WASD to move, drag the noise settings to reshape the terrain live. Needs a WebGPU-capable browser (Chrome/Edge) — WebGL2 can't express this renderer's indirect draw calls.
 
 <p align="center">
   <img src="terrain/screenshots/example1.png" width="420">

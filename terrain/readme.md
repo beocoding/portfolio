@@ -2,6 +2,8 @@
 
 A tile-based procedural terrain system for [Bevy](https://bevyengine.org/), built around a multi-draw indirect render pipeline, a custom slot-map instance manager, and a double-buffered GPU upload system. CPU draw call overhead is **O(1)** regardless of tile count.
 
+**[Live Demo](https://beocoding.github.io/portfolio/terrain/demo/)** — WASD to move, scroll to zoom, drag the noise settings to reshape the terrain live. Requires a WebGPU-capable browser (Chrome/Edge) — WebGL2 can't express the indirect draw calls this renderer depends on.
+
 ***
 ## Screenshots
 
