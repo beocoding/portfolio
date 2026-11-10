@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Portfolio — Systems &amp; Graphics Programming in Rust</title>
+<meta name="description" content="Rust systems and graphics programming — GPU-driven rendering pipelines, a from-scratch physics engine, and a zero-copy serialization format." />
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #13141a;
+    --border: #1e2030;
+    --ink: #e0e0e0;
+    --ink-dim: #8090a0;
+    --ink-faint: #6c7a8a;
+    --voxels: #5ecf7a;
+    --terrain: #5ab0e0;
+    --xpbd: #c77adf;
+    --fluffr: #e0a050;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.6;
+  }
+
+  a { color: inherit; }
+
+  img { max-width: 100%; display: block; }
+
+  /* ---------- Nav ---------- */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 32px;
+    background: rgba(10, 10, 15, 0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  nav .brand {
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+  }
+
+  nav .links {
+    display: flex;
+    gap: 28px;
+    font-size: 13px;
+    color: var(--ink-dim);
+  }
+
+  nav .links a {
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  nav .links a:hover { color: var(--ink); }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 96px 32px 64px;
+    text-align: center;
+  }
+
+  .hero h1 {
+    font-size: clamp(32px, 5vw, 48px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #ffffff 30%, #9aa5b8 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .hero p {
+    font-size: 17px;
+    color: var(--ink-dim);
+    max-width: 640px;
+    margin: 0 auto 32px;
+  }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .badge {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--ink-dim);
+  }
+
+  /* ---------- Section shell ---------- */
+  section { max-width: 1120px; margin: 0 auto; padding: 0 32px; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+
+  .section-head h2 {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* ---------- Project cards ---------- */
+  .projects {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+    gap: 24px;
+    margin-bottom: 96px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border-top: 3px solid var(--accent, var(--border));
+    transition: transform 0.2s ease, border-color 0.2s ease;
+  }
+
+  .card:hover { transform: translateY(-3px); }
+
+  .card .visual {
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: #000;
+    position: relative;
+  }
+
+  .card .visual img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.92;
+  }
+
+  .live-pill {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 10px 5px 8px;
+    border-radius: 999px;
+    background: rgba(10, 10, 15, 0.75);
+    backdrop-filter: blur(4px);
+    color: #fff;
+  }
+
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4ade80;
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); }
+    70%  { box-shadow: 0 0 0 7px rgba(74, 222, 128, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+  }
+
+  .card .body { padding: 26px 26px 24px; display: flex; flex-direction: column; flex: 1; }
+
+  .card h3 { font-size: 19px; font-weight: 700; margin-bottom: 10px; }
+  .card h3 a { text-decoration: none; }
+  .card h3 a:hover { color: var(--accent); }
+
+  .card p.desc {
+    font-size: 14px;
+    color: var(--ink-dim);
+    flex: 1;
+    margin-bottom: 18px;
+  }
+
+  .card p.desc b { color: var(--ink); font-weight: 600; }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+
+  .tags span {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 5px;
+    background: #0d0e13;
+    border: 1px solid var(--border);
+    color: var(--ink-faint);
+  }
+
+  .card-links { display: flex; gap: 10px; font-size: 13px; font-weight: 600; }
+
+  .card-links a {
+    flex: 1;
+    text-align: center;
+    padding: 10px 14px;
+    border-radius: 7px;
+    text-decoration: none;
+    transition: opacity 0.15s, background 0.15s;
+  }
+
+  .card-links .primary { background: var(--accent); color: #0a0a0f; }
+  .card-links .primary:hover { opacity: 0.88; }
+
+  .card-links .secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--ink-dim);
+  }
+  .card-links .secondary:hover { border-color: var(--accent); color: var(--ink); }
+
+  .note {
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    margin-top: 10px;
+  }
+
+  /* ---------- Fluffr benchmark visual ---------- */
+  .bench {
+    aspect-ratio: auto !important;
+    background: #0d0e13;
+    padding: 28px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 14px;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  .bench-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--ink-dim);
+    margin-bottom: 4px;
+  }
+
+  .bench-label b { color: var(--ink); }
+
+  .bench-track { height: 7px; background: #1a1c26; border-radius: 4px; overflow: hidden; }
+
+  .bench-fill { height: 100%; border-radius: 4px; background: var(--ink-faint); }
+
+  .bench-fill.hero-fill {
+    background: var(--fluffr);
+    box-shadow: 0 0 8px rgba(224, 160, 80, 0.5);
+  }
+
+  /* ---------- Tech stack strip ---------- */
+  .stack {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+    margin-bottom: 90px;
+  }
+
+  .stack-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+
+  .stack-item .label {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .stack-item .desc { font-size: 12.5px; color: var(--ink-faint); }
+
+  /* ---------- Footer ---------- */
+  footer {
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+    padding: 32px;
+    text-align: center;
+  }
+
+  footer p { font-size: 12.5px; color: var(--ink-faint); }
+  footer a { text-decoration: none; color: var(--ink-dim); }
+  footer a:hover { color: var(--ink); }
+
+  @media (max-width: 560px) {
+    nav { padding: 14px 18px; }
+    nav .links { gap: 16px; }
+    .hero { padding: 64px 20px 48px; }
+    section { padding: 0 18px; }
+    .projects { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="#top">Portfolio</a>
+  <div class="links">
+    <a href="#projects">Projects</a>
+    <a href="https://github.com/beocoding/portfolio" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</nav>
+
+<div id="top" class="hero">
+  <h1>Systems &amp; Graphics Programming in Rust</h1>
+  <p>GPU-driven rendering pipelines, a from-scratch physics engine, and a zero-copy serialization format. Every project here is built around minimizing CPU overhead, draw calls, or copies — instead of reaching for the naive approach first.</p>
+  <div class="badges">
+    <span class="badge">Rust</span>
+    <span class="badge">Bevy</span>
+    <span class="badge">WGSL</span>
+    <span class="badge">WebAssembly</span>
+    <span class="badge">WebGPU</span>
+  </div>
+</div>
+
+<section id="projects">
+  <div class="section-head"><h2>Projects</h2></div>
+  <div class="projects">
+
+    <!-- Voxel Engine -->
+    <div class="card" style="--accent: var(--voxels)">
+      <div class="visual">
+        <img src="assets/voxels-1.png" alt="Voxel engine render of a greedy-meshed dirt platform" loading="lazy">
+      </div>
+      <div class="body">
+        <h3><a href="https://github.com/beocoding/portfolio/tree/main/voxels" target="_blank" rel="noopener">Voxel Engine</a></h3>
+        <p class="desc">A custom voxel rendering engine on top of Bevy. Greedy meshing, instanced rendering, and <code>multi_draw_indirect</code> collapse an entire visible world into <b>one GPU draw call per frame</b> — <b>~26.4 million voxels</b> rendered with CPU overhead that's O(1) regardless of world size.</p>
+        <div class="tags"><span>Rust</span><span>Bevy</span><span>WGSL</span><span>Multi-draw Indirect</span></div>
+        <div class="card-links">
+          <a class="primary" href="https://github.com/beocoding/portfolio/tree/main/voxels" target="_blank" rel="noopener">View Code</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Terrain Generator -->
+    <div class="card" style="--accent: var(--terrain)">
+      <div class="visual">
+        <img src="assets/terrain-1.png" alt="Procedural terrain render with the in-app settings panel" loading="lazy">
+        <span class="live-pill" id="terrain-live-pill"><span class="live-dot"></span>Live Demo</span>
+      </div>
+      <div class="body">
+        <h3><a href="https://github.com/beocoding/portfolio/tree/main/terrain" target="_blank" rel="noopener">Terrain Generator</a></h3>
+        <p class="desc">A tile-based procedural terrain system for Bevy built around a multi-draw indirect render pipeline, a custom slot-map instance manager, and double-buffered GPU uploads. CPU draw call overhead is <b>O(1)</b> regardless of tile count.</p>
+        <div class="tags"><span>Rust</span><span>Bevy</span><span>WGSL</span><span>WebGPU</span></div>
+        <div class="card-links" id="terrain-links">
+          <a class="primary" href="terrain/demo/" id="terrain-demo-link">Live Demo</a>
+          <a class="secondary" href="https://github.com/beocoding/portfolio/tree/main/terrain" target="_blank" rel="noopener">View Code</a>
+        </div>
+        <p class="note">Renders via WebGPU (indirect draw isn't possible on WebGL2) — use a current Chrome or Edge.</p>
+      </div>
+    </div>
+
+    <!-- XPBD -->
+    <div class="card" style="--accent: var(--xpbd)">
+      <div class="visual">
+        <img src="assets/xpbd-poster.png" alt="XPBD physics demo showing a hinged door, servo arm, and chain" loading="lazy">
+        <span class="live-pill"><span class="live-dot"></span>Live Demo</span>
+      </div>
+      <div class="body">
+        <h3><a href="https://github.com/beocoding/portfolio/tree/main/xpbd" target="_blank" rel="noopener">XPBD Physics Engine</a></h3>
+        <p class="desc">A real-time rigid body physics engine implementing <b>Extended Position-Based Dynamics</b> (Müller et al., SIGGRAPH 2020) — distance, hinge, servo, and mouse-driven grab constraints on a sub-stepped solver fully decoupled from rendering.</p>
+        <div class="tags"><span>Rust</span><span>Bevy ECS</span><span>WebAssembly</span><span>WebGL2</span></div>
+        <div class="card-links">
+          <a class="primary" href="xpbd/demo/">Live Demo</a>
+          <a class="secondary" href="https://github.com/beocoding/portfolio/tree/main/xpbd" target="_blank" rel="noopener">View Code</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fluffr -->
+    <div class="card" style="--accent: var(--fluffr)">
+      <div class="visual bench">
+        <div class="bench-row">
+          <div class="bench-label"><span>JSON</span><b>597.1 ns</b></div>
+          <div class="bench-track"><div class="bench-fill" style="width: 100%"></div></div>
+        </div>
+        <div class="bench-row">
+          <div class="bench-label"><span>FlatBuffers</span><b>337.2 ns</b></div>
+          <div class="bench-track"><div class="bench-fill" style="width: 56.5%"></div></div>
+        </div>
+        <div class="bench-row">
+          <div class="bench-label"><span>Protobuf</span><b>240.7 ns</b></div>
+          <div class="bench-track"><div class="bench-fill" style="width: 40.3%"></div></div>
+        </div>
+        <div class="bench-row">
+          <div class="bench-label"><span>Fluffr</span><b>4.97 ns</b></div>
+          <div class="bench-track"><div class="bench-fill hero-fill" style="width: 1.2%"></div></div>
+        </div>
+      </div>
+      <div class="body">
+        <h3><a href="https://github.com/beocoding/portfolio/tree/main/fluffr" target="_blank" rel="noopener">Fluffr</a></h3>
+        <p class="desc">A bit-level, zero-copy serialization library in the spirit of FlatBuffers — except the schema <i>is</i> your Rust struct. Decode is <b>~70x faster than FlatBuffers</b> and <b>~120x faster than JSON</b>, with no parse step.</p>
+        <div class="tags"><span>Rust</span><span>Proc-macros</span><span>Zero-copy</span><span>Columnar (SoA)</span></div>
+        <div class="card-links">
+          <a class="primary" href="https://github.com/beocoding/portfolio/tree/main/fluffr" target="_blank" rel="noopener">View Code</a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section id="stack">
+  <div class="section-head"><h2>Tech Stack</h2></div>
+  <div class="stack">
+    <div class="stack-item">
+      <div class="label">Rendering</div>
+      <div class="desc">Bevy (ECS + render graph), custom WGSL shaders, GPU-driven multi-draw indirect pipelines</div>
+    </div>
+    <div class="stack-item">
+      <div class="label">Simulation</div>
+      <div class="desc">Custom XPBD constraint solver, decoupled from rendering via fixed-timestep ECS scheduling</div>
+    </div>
+    <div class="stack-item">
+      <div class="label">Serialization</div>
+      <div class="desc">Proc-macro-driven zero-copy binary formats — no codegen step, no schema language</div>
+    </div>
+    <div class="stack-item">
+      <div class="label">Web</div>
+      <div class="desc">wasm-bindgen / Trunk, targeting both WebGL2 and WebGPU depending on what each renderer needs</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>© Han — code shown for portfolio/demonstration purposes, all rights reserved. <a href="https://github.com/beocoding/portfolio" target="_blank" rel="noopener">View source on GitHub ↗</a></p>
+</footer>
+
+</body>
+</html>
