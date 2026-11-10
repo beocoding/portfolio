@@ -1,5 +1,5 @@
 
-use bevy::{core_pipeline::core_3d::Transparent3d, ecs::{query::ROQueryItem, system::{lifetimeless::{Read, SRes}, SystemParamItem}}, mesh::{PrimitiveTopology, VertexBufferLayout, VertexFormat}, pbr::{MeshPipeline, MeshPipelineKey, MeshViewBindGroup, SetMeshViewBindGroup}, prelude::*, render::{extract_component::ExtractComponentPlugin, extract_resource::ExtractResourcePlugin, render_phase::{AddRenderCommand, DrawFunctions, PhaseItem, PhaseItemExtraIndex, RenderCommand, RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases}, render_resource::{BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferUsages, CachedPipelineState, Canonical, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState, DrawIndirectArgs, FragmentState, MultisampleState, PipelineCache, PrimitiveState, PushConstantRange, RenderPipeline, RenderPipelineDescriptor, ShaderStages, Specializer, SpecializerKey, StencilState, TextureFormat, Variants, VertexAttribute, VertexState, VertexStepMode}, renderer::{RenderDevice, RenderQueue}, settings::{WgpuFeatures, WgpuSettings}, sync_world::RenderEntity, view::{ExtractedView, ViewTarget, ViewUniformOffset}, Extract, Render, RenderApp, RenderStartup, RenderSystems}};
+use bevy::{core_pipeline::core_3d::Transparent3d, ecs::{query::ROQueryItem, system::{lifetimeless::{Read, SRes}, SystemParamItem}}, mesh::{PrimitiveTopology, VertexBufferLayout, VertexFormat}, pbr::{MeshPipeline, MeshPipelineKey, MeshViewBindGroup, SetMeshViewBindGroup}, prelude::*, render::{extract_component::ExtractComponentPlugin, extract_resource::ExtractResourcePlugin, render_phase::{AddRenderCommand, DrawFunctions, PhaseItem, PhaseItemExtraIndex, RenderCommand, RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases}, render_resource::{BindGroupLayout, BlendState, Buffer, BufferDescriptor, BufferUsages, CachedPipelineState, Canonical, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState, DrawIndirectArgs, FragmentState, MultisampleState, PipelineCache, PrimitiveState, PushConstantRange, RenderPipeline, RenderPipelineDescriptor, ShaderStages, Specializer, SpecializerKey, StencilState, TextureFormat, Variants, VertexAttribute, VertexState, VertexStepMode}, renderer::{RenderDevice, RenderQueue}, sync_world::RenderEntity, view::{ExtractedView, ViewTarget, ViewUniformOffset}, Extract, Render, RenderApp, RenderStartup, RenderSystems}};
 
 use crate::{buffer::{TerrainMeshData, TerrainMeshGpuBuffer}, config::{ChunkSettings, NoiseSettings, NoisePatterns}, noise::{generate_octave_fractals, generate_tile_mesh, DirtyTile, TerrainMeshlet, TerrainTileId, TerrainVertex}};
 const SHADER_ASSET_PATH: &str = "shaders/terrain.wgsl";
@@ -212,16 +212,22 @@ impl Plugin for TerrainPlugin {
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
-        // Request the INDRECT_FIRST_INSTANCE feature
-        let mut wgpu_settings = WgpuSettings::default();
-        wgpu_settings.features |= WgpuFeatures::INDIRECT_FIRST_INSTANCE;
         render_app
             .init_resource::<FrameCounter>()
             .init_resource::<TerrainMeshGpuBuffer>()
-            .init_resource::<TerrainMultiDrawBuffer>()
-            // inside TerrainPlugin::finish (after you get render_app)
-            .add_render_command::<Transparent3d, DrawCustomIndirect>()
+            .init_resource::<TerrainMultiDrawBuffer>();
 
+        // Native uses one multi_draw_indirect call for every tile (see
+        // DrawTerrainMeshMultiIndirect). WebGL2 has no indirect-draw API at all, so
+        // the wasm build falls back to one regular draw call per tile instead
+        // (DrawTerrainMeshDirect) -- still correct, just without the O(1) CPU
+        // overhead the indirect path is built around.
+        #[cfg(not(target_arch = "wasm32"))]
+        render_app.add_render_command::<Transparent3d, DrawCustomIndirect>();
+        #[cfg(target_arch = "wasm32")]
+        render_app.add_render_command::<Transparent3d, DrawCustomDirect>();
+
+        render_app
             .add_systems(
                 RenderStartup,
                 (init_terrain_pipeline, init_terrain_gpu_buffer),
@@ -403,9 +409,14 @@ fn queue_terrain_tiles(
     views: Query<(Entity, &ExtractedView, &Msaa)>,
 ) {
 
+    #[cfg(not(target_arch = "wasm32"))]
     let draw_custom = transparent_3d_draw_functions
         .read()
         .id::<DrawCustomIndirect>();
+    #[cfg(target_arch = "wasm32")]
+    let draw_custom = transparent_3d_draw_functions
+        .read()
+        .id::<DrawCustomDirect>();
 
     for (view_entity, view, msaa) in &views {
         let Some(transparent_phase) = transparent_render_phases
@@ -449,8 +460,15 @@ fn queue_terrain_tiles(
 type DrawCustomIndirect = (
     SetItemPipeline,
     SetMeshViewBindGroup<0>,
-    SetTerrainPushConstants, 
+    SetTerrainPushConstants,
     DrawTerrainMeshMultiIndirect,
+);
+
+type DrawCustomDirect = (
+    SetItemPipeline,
+    SetMeshViewBindGroup<0>,
+    SetTerrainPushConstants,
+    DrawTerrainMeshDirect,
 );
 
 pub struct SetTerrainViewBindGroup<const I: usize>;
@@ -517,7 +535,52 @@ impl<P: PhaseItem> RenderCommand<P> for DrawTerrainMeshMultiIndirect {
         pass.multi_draw_indirect(indirect_buffer, 0, active_draws);
         
         // println!("  🎯 Multi-draw: {} tiles in ONE call", active_draws);
-        
+
+        RenderCommandResult::Success
+    }
+}
+
+/// WebGL2 fallback: WebGL2 has no indirect-draw API, so instead of one
+/// multi_draw_indirect call covering every tile, this issues one regular `draw`
+/// call per active tile. `instances: tile_id..tile_id+1` still lands in the
+/// shader's `@builtin(instance_index)` exactly as the indirect path's
+/// `first_instance` does -- wgpu's GL backend emulates a nonzero first_instance
+/// on regular draws via a uniform (it just can't do it for *indirect* draws,
+/// which is the actual gap this command works around).
+pub struct DrawTerrainMeshDirect;
+
+impl<P: PhaseItem> RenderCommand<P> for DrawTerrainMeshDirect {
+    type Param = (SRes<TerrainMeshGpuBuffer>, SRes<TerrainMultiDrawBuffer>);
+    type ViewQuery = ();
+    type ItemQuery = ();
+
+    fn render<'w>(
+        _item: &P,
+        _view: (),
+        _query_item: Option<ROQueryItem<Self::ItemQuery>>,
+        (terrain_buffer, multi_draw): SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let terrain_buffer = terrain_buffer.into_inner();
+        let multi_draw = multi_draw.into_inner();
+
+        let Some(vertex_buffer) = &terrain_buffer.buffer else {
+            return RenderCommandResult::Skip;
+        };
+
+        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+
+        for (tile_id, cmd) in multi_draw.commands.iter().enumerate() {
+            if cmd.vertex_count == 0 {
+                continue;
+            }
+            let tile_id = tile_id as u32;
+            pass.draw(
+                cmd.first_vertex..(cmd.first_vertex + cmd.vertex_count),
+                tile_id..(tile_id + 1),
+            );
+        }
+
         RenderCommandResult::Success
     }
 }
@@ -669,8 +732,17 @@ pub fn prepare_multi_draw(
         *multi_draw = TerrainMultiDrawBuffer(MultiDrawBuffer::new(expected_tile_count));
     }
     
+    // The indirect-commands GPU buffer (BufferUsages::INDIRECT) is only needed by
+    // the native multi_draw_indirect path -- GL/WebGL2 devices don't support that
+    // downlevel capability at all and reject the buffer at creation. The wasm
+    // fallback draws straight from `multi_draw.commands` on the CPU side instead,
+    // so it never needs this buffer to exist; `update_command` below only touches
+    // that CPU-side Vec regardless of this cfg.
+    #[cfg(not(target_arch = "wasm32"))]
     multi_draw.ensure_created(&render_device);
-    
+    #[cfg(target_arch = "wasm32")]
+    let _ = &render_device;
+
     let changed_count = query.iter().count();
     if changed_count > 0 {
         println!("\n🎮 ============ MULTI-DRAW UPDATE ============");

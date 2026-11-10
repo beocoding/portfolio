@@ -1,17 +1,9 @@
 #import bevy_pbr::mesh_view_bindings::view
 
 
-struct SdfConfig {
-    kind:   u8,
-    op:     u8,
-    smooth: u8,        // unorm8 over [0, 4^scale]
-    scale:  u8,        // log4 class; for plane kinds: class of |offset|
-    params: [i16; 4],  // snorm16 over ±4^scale
-}
-
 struct VertexInput {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: SdfConfig,
+    @location(0) altitude: f32,
+    @location(1) normal: u32,
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance_idx: u32,
 }
@@ -45,8 +37,8 @@ fn vertex(in: VertexInput) -> VertexOutput {
     let VERTICES_PER_ROW = (pc.chunk_size << 1) + 4;
     let VERTICES_PER_TILE = VERTICES_PER_ROW * pc.chunk_size;
 
-    let tile_x = in.tile_id % MAP_CHUNK_WIDTH;
-    let tile_z = in.tile_id / MAP_CHUNK_HEIGHT;
+    let tile_x = in.instance_idx % MAP_CHUNK_WIDTH;
+    let tile_z = in.instance_idx / MAP_CHUNK_WIDTH;
 
     let map_world_width = f32(MAP_CHUNK_WIDTH) * f32(pc.chunk_size) * VERTEX_SPACING;
     let map_world_depth = f32(MAP_CHUNK_HEIGHT) * f32(pc.chunk_size) * VERTEX_SPACING;

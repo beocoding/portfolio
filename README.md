@@ -31,7 +31,7 @@ A custom voxel rendering engine on top of Bevy. Greedy meshing, instanced render
 
 A tile-based procedural terrain system for Bevy built around a multi-draw indirect render pipeline, a custom slot-map instance manager, and a double-buffered GPU upload system. Like the voxel engine, CPU draw call overhead is **O(1)** regardless of tile count — the render world is a strict one-directional consumer of noise and mesh data generated on the main world.
 
-**[Live interactive demo →](https://beocoding.github.io/portfolio/terrain/demo/)** — WASD to move, drag the noise settings to reshape the terrain live. Needs a WebGPU-capable browser (Chrome/Edge) — WebGL2 can't express this renderer's indirect draw calls.
+**[Live interactive demo →](https://beocoding.github.io/portfolio/terrain/demo/)** — WASD to move, drag the noise settings to reshape the terrain live. Runs on WebGPU where available, falling back to a per-tile draw path on WebGL2-only browsers.
 
 <p align="center">
   <img src="terrain/screenshots/example1.png" width="420">

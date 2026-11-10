@@ -378,17 +378,16 @@
     <div class="card" style="--accent: var(--terrain)">
       <div class="visual">
         <img src="assets/terrain-1.png" alt="Procedural terrain render with the in-app settings panel" loading="lazy">
-        <span class="live-pill" id="terrain-live-pill"><span class="live-dot"></span>Live Demo</span>
+        <span class="live-pill"><span class="live-dot"></span>Live Demo</span>
       </div>
       <div class="body">
         <h3><a href="https://github.com/beocoding/portfolio/tree/main/terrain" target="_blank" rel="noopener">Terrain Generator</a></h3>
         <p class="desc">A tile-based procedural terrain system for Bevy built around a multi-draw indirect render pipeline, a custom slot-map instance manager, and double-buffered GPU uploads. CPU draw call overhead is <b>O(1)</b> regardless of tile count.</p>
-        <div class="tags"><span>Rust</span><span>Bevy</span><span>WGSL</span><span>WebGPU</span></div>
-        <div class="card-links" id="terrain-links">
-          <a class="primary" href="terrain/demo/" id="terrain-demo-link">Live Demo</a>
+        <div class="tags"><span>Rust</span><span>Bevy</span><span>WGSL</span><span>WebGL2 / WebGPU</span></div>
+        <div class="card-links">
+          <a class="primary" href="terrain/demo/">Live Demo</a>
           <a class="secondary" href="https://github.com/beocoding/portfolio/tree/main/terrain" target="_blank" rel="noopener">View Code</a>
         </div>
-        <p class="note">Renders via WebGPU (indirect draw isn't possible on WebGL2) — use a current Chrome or Edge.</p>
       </div>
     </div>
 

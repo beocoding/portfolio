@@ -168,15 +168,15 @@
   <div id="loading">Loading terrain…</div>
   <canvas id="bevy" style="display:none;"></canvas>
   <div id="unsupported">
-    <h2>WebGPU required</h2>
-    <p>This demo renders its terrain with a GPU-driven multi-draw-indirect pipeline, which WebGL2 doesn't support — it needs an actual WebGPU-capable browser. Try a recent <strong>Chrome</strong> or <strong>Edge</strong>, or check out the screenshots and source instead.</p>
+    <h2>Couldn't start the demo</h2>
+    <p>This needs a browser with WebGL2 or WebGPU and WebAssembly support — which covers the vast majority of modern browsers. Try updating your browser, or check out the screenshots and source instead.</p>
     <a href="../../#projects">← Back to portfolio</a>
   </div>
 </div>
 
 <div id="description">
   <h1>Procedural Terrain</h1>
-  <p class="subtitle">Built in Rust · Bevy ECS · WebGPU</p>
+  <p class="subtitle">Built in Rust · Bevy ECS · WebGL2 / WebGPU</p>
 
   <hr class="divider">
 
@@ -185,7 +185,7 @@
     <div class="tech-grid">
       <div class="tech-item">
         <span class="tech-label">Multi-draw indirect</span>
-        <span class="tech-desc">Every visible tile is drawn in a single GPU call via multi_draw_indirect. CPU overhead stays O(1) regardless of how many tiles are on screen.</span>
+        <span class="tech-desc">On native and WebGPU, every visible tile is drawn in a single GPU call via multi_draw_indirect, keeping CPU overhead O(1) regardless of tile count.</span>
       </div>
       <div class="tech-item">
         <span class="tech-label">Fractal noise</span>
@@ -204,8 +204,8 @@
         <span class="tech-desc">Noise offset, octaves, and seed are all live-tunable from the on-screen panel — no recompiling, no reload.</span>
       </div>
       <div class="tech-item">
-        <span class="tech-label">WebGPU</span>
-        <span class="tech-desc">Compiled from Rust to wasm32 via Trunk. Indirect draw calls aren't expressible in WebGL2, so this demo targets WebGPU specifically.</span>
+        <span class="tech-label">WebGL2 fallback</span>
+        <span class="tech-desc">WebGL2 has no indirect-draw API at all, so browsers without WebGPU fall back to one regular draw call per tile instead — same renderer, same shader, just a different submission strategy.</span>
       </div>
     </div>
   </div>
@@ -227,27 +227,14 @@
     unsupported.classList.add('show');
   }
 
-  // Checking `'gpu' in navigator` alone isn't enough — some browsers expose
-  // the API shell but have no real adapter behind it (e.g. no GPU passthrough
-  // in a sandboxed/virtualized context), and wgpu silently falls back to a
-  // GL backend that can't satisfy this renderer's indirect-draw requirement,
-  // crashing asynchronously inside Bevy's event loop where no JS try/catch
-  // here can intercept it. Requesting a real adapter up front catches that
-  // case before any of the 37MB wasm module is even fetched.
+  // The wasm build renders via WebGPU when available and falls back to
+  // WebGL2 otherwise (see terrain/src/pipeline.rs), so no capability probe
+  // is needed up front — just try it, and show a friendly message for the
+  // rare case of a browser with neither (or no WebAssembly support at all).
   (async () => {
-    let adapter = null;
-    if ('gpu' in navigator) {
-      try { adapter = await navigator.gpu.requestAdapter(); } catch { adapter = null; }
-    }
-
-    if (!adapter) {
-      showUnsupported();
-      return;
-    }
-
     try {
-      const bindings = await import('./terrain-ce712a9f3e4391e9.js');
-      await bindings.default({ module_or_path: './terrain-ce712a9f3e4391e9_bg.wasm' });
+      const bindings = await import('./terrain-3b449e8924f35e2b.js');
+      await bindings.default({ module_or_path: './terrain-3b449e8924f35e2b_bg.wasm' });
       window.wasmBindings = bindings;
       loading.style.display = 'none';
       canvas.style.display = 'block';

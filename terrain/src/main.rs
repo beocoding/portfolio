@@ -1,11 +1,6 @@
-use bevy::{
-    prelude::*,
-    render::settings::WgpuFeatures,
-    render::{
-        RenderPlugin,
-        settings::{RenderCreation, WgpuSettings}
-    },
-};
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings};
+use bevy::{prelude::*, render::RenderPlugin};
 
 use terrain::{
     camera::{move_player, rotate_player_camera, spawn_player_cameras, spawn_test_player, update_player_cameras, zoom_player_camera}, config::CameraSettings, debug::{debug_draw_tiles,  debug_tiles_spawned}, pipeline::{init_terrain, TerrainPlugin}, terrain_ui::TerrainUiPlugin
@@ -26,6 +21,13 @@ fn main() {
                     ..default()
                 })
                 .set(RenderPlugin {
+                    // multi_draw_indirect (and the INDIRECT_FIRST_INSTANCE feature it
+                    // needs) has no WebGL2 equivalent at all -- requesting it there
+                    // fails device creation outright. The wasm build renders each tile
+                    // with individual draw calls instead (see pipeline.rs), so it never
+                    // asks for this feature and runs on whatever backend the browser
+                    // gives it (WebGL2 or WebGPU).
+                    #[cfg(not(target_arch = "wasm32"))]
                     render_creation: RenderCreation::Automatic(WgpuSettings {
                         features: WgpuFeatures::default() | WgpuFeatures::INDIRECT_FIRST_INSTANCE,
                         ..default()

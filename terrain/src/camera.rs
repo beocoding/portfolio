@@ -177,13 +177,21 @@ pub fn rotate_player_camera(
     // Check if Alt is being held
     let alt_held = keyboard.pressed(KeyCode::AltLeft) || keyboard.pressed(KeyCode::AltRight);
     
-    // Lock cursor for infinite scrolling only when window is focused and Alt is not held
+    // Lock cursor for infinite scrolling only when window is focused and Alt is not held.
+    // Only write when the desired state actually differs: `cursor_query.single_mut()`
+    // marks the component changed on any mutable deref regardless of whether the value
+    // differs, and bevy_winit reacts to that by re-issuing the platform cursor-grab call
+    // (requestPointerLock() on web) -- writing the same value every frame means that call
+    // fires every frame too, which is wasteful everywhere and, in a context where the
+    // lock request fails (e.g. no user gesture yet), spams an unhandled rejection per frame.
     if let Ok(window) = window_query.single() {
         if let Ok(mut cursor_options) = cursor_query.single_mut() {
-            if window.focused && !alt_held {
+            let want_locked = window.focused && !alt_held;
+            let is_locked = cursor_options.grab_mode == CursorGrabMode::Locked;
+            if want_locked && !is_locked {
                 cursor_options.grab_mode = CursorGrabMode::Locked;
                 cursor_options.visible = false;
-            } else {
+            } else if !want_locked && is_locked {
                 cursor_options.grab_mode = CursorGrabMode::None;
                 cursor_options.visible = true;
             }
